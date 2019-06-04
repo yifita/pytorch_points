@@ -157,8 +157,6 @@ def faiss_knn(k, query, points, NCHW=True):
         query_trans = query.contiguous()
 
     batch_size, num_points, _ = points_trans.size()
-    assert(num_points >= query.size(1)
-           ), "points size must be greater or equal to query size"
     # BxMxk
     index_batch, distance_batch = KNN.apply(k, query_trans, points_trans)
     # BxNxC -> BxMxNxC
