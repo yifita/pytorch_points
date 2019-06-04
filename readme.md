@@ -15,6 +15,15 @@ Many of the functions are adapted from the code base of amazing researchers. Tha
 - `utils`: utility functions including functions for point cloud in/output etc
   - pc_utils
 
+### install
+```bash
+# requires faiss-gpu and pytorch>=1.0
+conda config --add_channels pytorch conda-forge
+conda create --name pytorch-1.0 --file requirements.txt
+
+python setup.py install
+```
+
 ### related repositories:
 - [AtlasNet](https://github.com/ThibaultGROUEIX/AtlasNet): Thanks Thibault for your AtlasNet!!! 
 - [Pointnet-Pytorch](https://github.com/erikwijmans/Pointnet2_PyTorch): pytorch implementation of pointnet.
