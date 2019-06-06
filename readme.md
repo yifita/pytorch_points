@@ -17,9 +17,12 @@ Many of the functions are adapted from the code base of amazing researchers. Tha
 
 ### install
 ```bash
-# requires faiss-gpu and pytorch>=1.0
-conda config --add_channels pytorch conda-forge
-conda create --name pytorch-1.0 --file requirements.txt
+# update conda
+conda update -n base -c defaults conda
+# requirements
+conda config --add channels pytorch
+conda config --add channels conda-forge
+conda create --name pytorch-1.1.0 --file requirements.txt
 
 python setup.py install
 ```
