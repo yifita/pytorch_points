@@ -528,10 +528,11 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True):
     compute normals vectors for batched points [B, C, M]
     If base is given, compute the normals of points using the neighborhood in base
     The direction of normal could flip.
-    inputs:
+    
+    Args:
         points: (B,C,M)
         base:   (B,C,N)
-    return:
+    Returns:
         normals: (B,C,M)
     """
     if base is None:
@@ -556,6 +557,32 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True):
     if NCHW:
         normals = normals.transpose(1, 2)
     return normals
+
+def barycentric_coordinates(points, ref_points):
+    """
+    compute barycentric coordinates of N points wrt M 2D triangles
+    detT = ((y2-y3)(x1-x3)+(x3-x2)(y1-y3))
+    epsilon_1 = ((y2-y3)(x-x3)+(x3-x2)(y-y3))/detT
+    epsilon_2 = ((y3-y1)(x-x3)+(x1-x3)(y-y3))/detT
+    epsilon_3 = 1-epsilon_1-epsilon_2
+    
+    Args: 
+        points: (B,2,N)
+        ref_points: (B,2,M)
+    Returns:
+        epsilon_1: (B, 1)
+        epsilon_2: (B, 1)
+        epsilon_3: (B, 1)
+    """
+    # find enclosing triangle
+    triangles, _, _ = group_knn(3, points, ref_points, unique=True, NCHW=True)  # B, 2, N, 3
+    # (y2-y3)(x1-x3)+(x3-x2)(y1-y3)
+    detT = (triangles[:,1,:,1]-triangles[:,1,:,2])*(triangles[:,0,:,0]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(triangles[:,1,:,0]-triangles[:,1,:,2])
+    # (y2-y3)(x-x3)+(x3-x2)(y1-y3)
+    epsilon_1 = (triangles[:,1,:,1]-triangles[:,1,:,2])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(points[:,1,:]-triangles[:,1,:,2])/detT
+    epsilon_2 = (triangles[:,1,:,2]-triangles[:,1,:,0])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,0]-triangles[:,0,:,2])*(points[:,1,:]-triangles[:,1,:,2])/detT
+    epsilon_3 = 1-epsilon_1-epsilon_2
+    return epsilon_1, epsilon_2, epsilon_3
 
 
 if __name__ == '__main__':
