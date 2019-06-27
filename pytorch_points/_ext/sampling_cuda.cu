@@ -45,7 +45,7 @@ at::Tensor gather_points_cuda_forward(int b, int c, int n, int npoints,
                   at::Tensor out) {
 
     cudaError_t err;
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(points.type(), "gather_points_cuda_forward", ([&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(points.scalar_type(), "gather_points_cuda_forward", ([&] {
             gather_points_forward_kernel<scalar_t><<<dim3(b, c, 1), opt_n_threads(npoints)>>>(
             b, c, n, npoints,
             points.data<scalar_t>(),
@@ -83,7 +83,7 @@ __global__ void gather_points_backward_kernel(int b, int c, int n, int m,
 at::Tensor gather_points_cuda_backward(int b, int c, int n, int npoints,
                        at::Tensor grad_out, at::Tensor idx, at::Tensor grad_points) {
     cudaError_t err;
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_out.type(), "gather_points_cuda_backward", ([&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_out.scalar_type(), "gather_points_cuda_backward", ([&] {
         gather_points_backward_kernel<scalar_t><<<dim3(b, c, 1), opt_n_threads(npoints)>>>(
             b, c, n, npoints,
             grad_out.data<scalar_t>(),
@@ -314,7 +314,7 @@ at::Tensor ball_query_cuda_forward(float radius, int nsample, at::Tensor query,
   const int n = xyz.size(1);
   const int m = query.size(1);
   const int c = query.size(-1);
-  AT_DISPATCH_FLOATING_TYPES(xyz.type(), "query_ball_point_kernel", ([&]() {
+  AT_DISPATCH_FLOATING_TYPES(xyz.scalar_type(), "query_ball_point_kernel", ([&]() {
     query_ball_point_kernel<<<b, opt_n_threads(m), 0, stream>>>(b, n, m, c, radius, nsample, 
       query.data<scalar_t>(), xyz.data<scalar_t>(), idx.data<int32_t>());
 		  }));

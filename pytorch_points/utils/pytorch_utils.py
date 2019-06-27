@@ -3,6 +3,16 @@ import numpy as np
 import os
 from collections import OrderedDict
 
+def weights_init(m):
+    """
+    initialize the weighs of the network for Convolutional layers and batchnorm layers
+    """
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
 
 def save_network(net, directory, network_label, epoch_label=None, **kwargs):
     save_filename = "_".join((network_label, str(epoch_label))) + ".pth"

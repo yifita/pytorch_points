@@ -570,19 +570,21 @@ def barycentric_coordinates(points, ref_points):
         points: (B,2,N)
         ref_points: (B,2,M)
     Returns:
-        epsilon_1: (B, 1)
-        epsilon_2: (B, 1)
-        epsilon_3: (B, 1)
+        index: (B, 2, N, 3)
+        epsilon_1: (B, N, 3)
+        epsilon_2: (B, N, 3)
+        epsilon_3: (B, N, 3)
     """
-    # find enclosing triangle
-    triangles, _, _ = group_knn(3, points, ref_points, unique=True, NCHW=True)  # B, 2, N, 3
+    # find enclosing triangle 
+    triangles, idx, _ = group_knn(3, points, ref_points, unique=True, NCHW=True)  # (B,2,N,3) and (B,M,3)
     # (y2-y3)(x1-x3)+(x3-x2)(y1-y3)
     detT = (triangles[:,1,:,1]-triangles[:,1,:,2])*(triangles[:,0,:,0]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(triangles[:,1,:,0]-triangles[:,1,:,2])
     # (y2-y3)(x-x3)+(x3-x2)(y1-y3)
     epsilon_1 = (triangles[:,1,:,1]-triangles[:,1,:,2])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(points[:,1,:]-triangles[:,1,:,2])/detT
     epsilon_2 = (triangles[:,1,:,2]-triangles[:,1,:,0])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,0]-triangles[:,0,:,2])*(points[:,1,:]-triangles[:,1,:,2])/detT
     epsilon_3 = 1-epsilon_1-epsilon_2
-    return epsilon_1, epsilon_2, epsilon_3
+    epsilon = torch.stack([epsilon_1, epsilon_2, epsilon_3], dim=-1)
+    return idx, epsilon
 
 
 if __name__ == '__main__':

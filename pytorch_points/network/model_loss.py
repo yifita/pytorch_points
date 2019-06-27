@@ -20,9 +20,9 @@ class NmDistanceFunction(torch.autograd.Function):
     def forward(ctx, xyz1, xyz2):
         batchsize, n, _ = xyz1.size()
         _, m, _ = xyz2.size()
-
-        dist1 = torch.zeros(batchsize, n)
-        dist2 = torch.zeros(batchsize, m)
+        assert(xyz1.dtype==xyz2.dtype)
+        dist1 = torch.zeros(batchsize, n, dtype=xyz1.dtype)
+        dist2 = torch.zeros(batchsize, m, dtype=xyz1.dtype)
 
         idx1 = torch.zeros(batchsize, n).type(torch.IntTensor)
         idx2 = torch.zeros(batchsize, m).type(torch.IntTensor)
@@ -31,7 +31,6 @@ class NmDistanceFunction(torch.autograd.Function):
         dist2 = dist2.cuda()
         idx1 = idx1.cuda()
         idx2 = idx2.cuda()
-
         losses.nmdistance_forward(xyz1, xyz2, dist1, dist2, idx1, idx2)
         ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
         return dist1, dist2
@@ -42,8 +41,8 @@ class NmDistanceFunction(torch.autograd.Function):
         graddist1 = graddist1.contiguous()
         graddist2 = graddist2.contiguous()
 
-        gradxyz1 = torch.zeros(xyz1.size())
-        gradxyz2 = torch.zeros(xyz2.size())
+        gradxyz1 = torch.zeros_like(xyz1)
+        gradxyz2 = torch.zeros_like(xyz2)
 
         gradxyz1 = gradxyz1.cuda()
         gradxyz2 = gradxyz2.cuda()
@@ -83,17 +82,9 @@ class ChamferLoss(torch.nn.Module):
         assert(pred.dim() == 3 and gt.dim() == 3), \
             "input for ChamferLoss must be a 3D-tensor, but pred.size() is {} gt.size() is {}".format(pred.size(), gt.size())
 
-        # need transpose
-        if pred.size(2) != 3:
-            assert(pred.size(1) == 3), "ChamferLoss is implemented for 3D points"
-            pred = pred.transpose(2, 1).contiguous()
-
-        if gt.size(2) != 3:
-            assert(gt.size(1) == 3), "ChamferLoss is implemented for 3D points"
-            gt = gt.transpose(2, 1).contiguous()
-
-        assert(pred.size(2) == 3 and gt.size(2) ==
-               3), "ChamferLoss is implemented for 3D points"
+        assert(pred.size(2) == gt.size(1)), "input and output must be (B,N,D) and (B,M,D)"
+        assert(pred.is_contiguous())
+        assert(gt.is_contiguous())
 
         if self.percentage < 1.0:
             # consider center points with higher weights
@@ -120,7 +111,6 @@ class ChamferLoss(torch.nn.Module):
             # weight = torch.exp(-dist_sqr / 1.5 * dist_sqrm)
             # weight = weight / torch.max(weight)
             # gt2pred = gt2pred * weight
-
         pred2gt, gt2pred = nndistance(pred, gt)
 
         if self.__threshold is not None:
@@ -145,9 +135,9 @@ class ChamferLoss(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    pc1 = torch.randn([2, 600, 3], dtype=torch.float64,
+    pc1 = torch.randn([2, 600, 2], dtype=torch.float64,
                       requires_grad=True).cuda()
-    pc2 = torch.randn([2, 600, 3], dtype=torch.float64,
+    pc2 = torch.randn([2, 600, 2], dtype=torch.float64,
                       requires_grad=True).cuda()
     chamfer = ChamferLoss()
     from torch.autograd import gradcheck
