@@ -580,8 +580,8 @@ def barycentric_coordinates(points, ref_points):
     # (y2-y3)(x1-x3)+(x3-x2)(y1-y3)
     detT = (triangles[:,1,:,1]-triangles[:,1,:,2])*(triangles[:,0,:,0]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(triangles[:,1,:,0]-triangles[:,1,:,2])
     # (y2-y3)(x-x3)+(x3-x2)(y1-y3)
-    epsilon_1 = (triangles[:,1,:,1]-triangles[:,1,:,2])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(points[:,1,:]-triangles[:,1,:,2])/detT
-    epsilon_2 = (triangles[:,1,:,2]-triangles[:,1,:,0])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,0]-triangles[:,0,:,2])*(points[:,1,:]-triangles[:,1,:,2])/detT
+    epsilon_1 = ((triangles[:,1,:,1]-triangles[:,1,:,2])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(points[:,1,:]-triangles[:,1,:,2]))/detT
+    epsilon_2 = ((triangles[:,1,:,2]-triangles[:,1,:,0])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,0]-triangles[:,0,:,2])*(points[:,1,:]-triangles[:,1,:,2]))/detT
     epsilon_3 = 1-epsilon_1-epsilon_2
     epsilon = torch.stack([epsilon_1, epsilon_2, epsilon_3], dim=-1)
     return idx, epsilon

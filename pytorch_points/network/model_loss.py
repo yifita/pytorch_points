@@ -82,7 +82,7 @@ class ChamferLoss(torch.nn.Module):
         assert(pred.dim() == 3 and gt.dim() == 3), \
             "input for ChamferLoss must be a 3D-tensor, but pred.size() is {} gt.size() is {}".format(pred.size(), gt.size())
 
-        assert(pred.size(2) == gt.size(1)), "input and output must be (B,N,D) and (B,M,D)"
+        assert(pred.size(2) == gt.size(2)), "input and output must be (B,N,D) and (B,M,D)"
         assert(pred.is_contiguous())
         assert(gt.is_contiguous())
 
