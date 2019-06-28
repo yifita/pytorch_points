@@ -242,6 +242,15 @@ def load(filename, count=None):
 
 
 def save_ply(points, filename, colors=None, normals=None):
+    """
+    save 3D/2D points to ply file
+    Args:
+        points (numpy array): (N,2or3)
+        colors (numpy uint8 array): (N, 3or4)
+    """
+    if points.shape[-1] == 2:
+        points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
+
     vertex = np.core.records.fromarrays(points.transpose(
         1, 0), names='x, y, z', formats='f4, f4, f4')
     num_vertex = len(vertex)

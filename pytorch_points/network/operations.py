@@ -570,10 +570,8 @@ def barycentric_coordinates(points, ref_points):
         points: (B,2,N)
         ref_points: (B,2,M)
     Returns:
-        index: (B, 2, N, 3)
+        index: (B, N, 3)
         epsilon_1: (B, N, 3)
-        epsilon_2: (B, N, 3)
-        epsilon_3: (B, N, 3)
     """
     # find enclosing triangle 
     triangles, idx, _ = group_knn(3, points, ref_points, unique=True, NCHW=True)  # (B,2,N,3) and (B,M,3)
