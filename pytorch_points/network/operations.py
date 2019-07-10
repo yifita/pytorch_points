@@ -558,31 +558,112 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True):
         normals = normals.transpose(1, 2)
     return normals
 
-def barycentric_coordinates(points, ref_points):
+def normalize(tensor, dim=-1):
+    """normalize tensor in specified dimension"""
+    return torch.nn.functional.normalize(tensor, p=2, dim=dim, eps=1e-12, out=None)
+
+def mean_value_coordinates(points, polygon):
     """
-    compute barycentric coordinates of N points wrt M 2D triangles
-    detT = ((y2-y3)(x1-x3)+(x3-x2)(y1-y3))
-    epsilon_1 = ((y2-y3)(x-x3)+(x3-x2)(y-y3))/detT
-    epsilon_2 = ((y3-y1)(x-x3)+(x1-x3)(y-y3))/detT
-    epsilon_3 = 1-epsilon_1-epsilon_2
-    
+    compute wachspress MVC of points wrt a polygon
     Args: 
-        points: (B,2,N)
-        ref_points: (B,2,M)
+        points: (B,D,N)
+        polygon: (B,D,M)
     Returns:
-        index: (B, N, 3)
-        epsilon_1: (B, N, 3)
+        epsilon: (B,N,L,K) weights for all triangles
+        simplexMask: (B,N,L) mask the enclosing triangle
+        pointMask: (B,N) mask the valid points
     """
-    # find enclosing triangle 
-    triangles, idx, _ = group_knn(3, points, ref_points, unique=True, NCHW=True)  # (B,2,N,3) and (B,M,3)
-    # (y2-y3)(x1-x3)+(x3-x2)(y1-y3)
-    detT = (triangles[:,1,:,1]-triangles[:,1,:,2])*(triangles[:,0,:,0]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(triangles[:,1,:,0]-triangles[:,1,:,2])
-    # (y2-y3)(x-x3)+(x3-x2)(y1-y3)
-    epsilon_1 = ((triangles[:,1,:,1]-triangles[:,1,:,2])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,2]-triangles[:,0,:,1])*(points[:,1,:]-triangles[:,1,:,2]))/detT
-    epsilon_2 = ((triangles[:,1,:,2]-triangles[:,1,:,0])*(points[:,0,:]-triangles[:,0,:,2])+(triangles[:,0,:,0]-triangles[:,0,:,2])*(points[:,1,:]-triangles[:,1,:,2]))/detT
-    epsilon_3 = 1-epsilon_1-epsilon_2
-    epsilon = torch.stack([epsilon_1, epsilon_2, epsilon_3], dim=-1)
-    return idx, epsilon
+    D = polygon.shape[1]
+    N = points.shape[-1]
+    M = polygon.shape[-1]
+    # (B,D,M,1) - (B,D,1,N) = (B,D,M,N)
+    e = normalize(polygon.unsqueeze(3)-points.unsqueeze(2))
+    eplus = torch.cat([e[:,:,1:,:], e[:,:,:1,:]], dim=2)
+    # (B,M,N)
+    cos = dot(e, eplus)
+    sin = cross_product_2D(e, eplus)
+    tanhalf = sin / (1+cos)
+    tanhalf_plus = torch.cat([tanhalf[:,1:,:], tanhalf[:,:1,:]], dim=1)
+    w = (tanhalf - tanhalf_plus)/torch.norm(polygon.unsqueeze(3)-points.unsqueeze(2), p=2, dim=1)
+    phi = w/torch.sum(w, dim=1, keepdim=True)
+    return phi
+
+
+def dot_product(tensor1, tensor2, dim=-1):
+    return torch.sum(tensor1*tensor2, dim=dim)
+
+def cross_product_2D(tensor1, tensor2, dim=1):
+    assert(tensor1.shape[dim] == tensor2.shape[dim] and tensor1.shape[dim] == 2)
+    output = torch.narrow(tensor1, dim, 0, 1) * torch.narrow(tensor2, dim, 1, 1) - torch.narrow(tensor1, dim, 1, 0) * torch.narrow(tensor2, dim, 0, 1)
+    return output.squeeze(dim)
+
+def barycentric_coordinates(points, ref_points, triangulation):
+    """
+    compute barycentric coordinates of N points wrt M 2D triangles/3D tetrahedrons
+    Args: 
+        points: (B,D,N)
+        ref_points: (B,D,M)
+        triangulation: (B,D+1,L) L triangles (D=2) or L tetrahedra (D=3) indices
+    Returns:
+        epsilon: (B,N,L,D+1) weights for all triangles
+        simplexMask: (B,N,L) mask the enclosing triangle
+        pointMask: (B,N) mask the valid points
+    """
+    L = triangulation.shape[-1]
+    D = ref_points.shape[1]
+    N = points.shape[-1]
+    M = ref_points.shape[-1]
+    # find enclosing triangle
+    ref_points = ref_points.transpose(2, 1).contiguous()
+    triangulation = triangulation.transpose(2, 1).contiguous()
+    # (B,L,D+1,D)
+    simplexes = torch.gather(ref_points.unsqueeze(1).expand(-1, L, -1, -1), 2, triangulation.unsqueeze(-1).expand(-1, -1, -1, ref_points.shape[-1]))
+    # (B,L,D,D+1)
+    simplexes = simplexes.transpose(2,3)
+    # (B,N,1,D) - (B,1,L,D) = (B,N,L,D)
+    B = points.transpose(1,2).unsqueeze(2) - simplexes[:, :, :, -1].unsqueeze(1)
+    # (B,L,D,D+1) - (B,L,D,1) = (B,L,D,D+1)
+    T = (simplexes - simplexes[:,:,:,-1:])[:,:,:,:D]
+    # (B,N,L,D,D)epsilon = (B,N,L,D,1), epsilon (B,N,L,D,1)
+    epsilon, _ = torch.solve(B.unsqueeze(-1), T.unsqueeze(1).expand(-1, N, -1, -1, -1))
+    epsilon_last = 1 - torch.sum(epsilon, dim=-2, keepdim=True)
+    # (B,N,L,D+1)
+    epsilon = torch.cat([epsilon, epsilon_last], dim=-2).squeeze(-1)
+    # (B,N,L) enclosing triangle has positive coordinates
+    simplexMask = torch.all((epsilon < 1) & (epsilon > 0), dim=-1)
+    # cannot be enclosed in multiple simplexes
+    assert(torch.all(torch.sum(simplexMask, dim=-1) <= 1)), "detected points enclosed in multiple triangles"
+    # (B,N,L,D+1)
+    epsilon = epsilon * simplexMask.unsqueeze(-1).to(dtype=epsilon.dtype)
+    # (B,N)
+    pointMask = torch.eq(torch.sum(simplexMask, dim=-1), 1)
+    return epsilon, simplexMask, pointMask
+
+def barycentric_map(points, epsilon, cage, triangulation, simplexMask):
+    """
+    Args:
+        points: (B,D,N)
+        epsilon: (B,N,L,D+1) weights
+        cage: (B,D,M) cage points
+        triangulation: (B,D+1,L) L triangles (D=2) or L tetrahedra (D=3) indices
+        simplexMask: (B,N,L) mask for enclosing simplex
+    Return:
+        mapped: (B,D,N) mapped points, invalid points is mapped to zero
+        epsilon_filtered: (B,N,D+1)
+    """
+    L = triangulation.shape[-1]
+    N = points.shape[-1]
+    cage_trans = cage.transpose(2, 1).contiguous()
+    triangulation = triangulation.transpose(2,1).contiguous()
+    # (B,L,D+1,D)
+    simplexes = torch.gather(cage_trans.unsqueeze(1).expand(-1, L, -1, -1), 2, triangulation.unsqueeze(-1).expand(-1, -1, -1, cage_trans.shape[-1]))
+    epsilon_filtered = simplexMask.to(dtype=epsilon.dtype).unsqueeze(-1)*epsilon
+    # (B,N,L,D+1,D) * (B,N,L,1,1) * (B,N,L,D+1,1) = (B,N,L,D+1,D)
+    mapped = simplexes.unsqueeze(1).expand(-1,N,-1,-1,-1)*epsilon_filtered.unsqueeze(-1)
+    # (B,N,D)
+    mapped = torch.sum(torch.sum(mapped, dim=2),dim=2)
+    epsilon_filtered = torch.sum(epsilon_filtered, dim=2)
+    return mapped.transpose(1,2), epsilon_filtered
 
 
 if __name__ == '__main__':

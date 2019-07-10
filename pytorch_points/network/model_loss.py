@@ -75,19 +75,24 @@ class ChamferLoss(torch.nn.Module):
     def unset_threshold(self):
         self.__threshold = None
 
-    def forward(self, pred, gt):
+    def forward(self, pred, gt, pred_mask=None, gt_mask=None):
         """
         chamfer disntance between (B,N,3) and (B,M,3) points
+        if pred_mask and gt_mask is given, then set unmasked loss to zero
         """
         assert(pred.dim() == 3 and gt.dim() == 3), \
             "input for ChamferLoss must be a 3D-tensor, but pred.size() is {} gt.size() is {}".format(pred.size(), gt.size())
+        if pred_mask is not None:
+            assert(pred.shape[:2] == pred_mask.shape), "Mask and input must have the same shape"
+        if gt_mask is not None:
+            assert(gt.shape[:2] == gt_mask.shape), "Mask and input must have the same shape"
 
         assert(pred.size(2) == gt.size(2)), "input and output must be (B,N,D) and (B,M,D)"
         assert(pred.is_contiguous())
         assert(gt.is_contiguous())
 
+        # discard border points
         if self.percentage < 1.0:
-            # consider center points with higher weights
             pred_center = torch.mean(pred, dim=1, keepdim=True)
             num_point = pred.size(1)
             pred, _, _ = operations.group_knn(int(self.percentage * num_point), pred_center, pred, unique=False, NCHW=False)
@@ -111,6 +116,12 @@ class ChamferLoss(torch.nn.Module):
             # weight = torch.exp(-dist_sqr / 1.5 * dist_sqrm)
             # weight = weight / torch.max(weight)
             # gt2pred = gt2pred * weight
+        if pred_mask is not None:
+            # (B,N) 
+            pred = torch.where(pred_mask.unsqueeze(-1), pred, torch.full(pred.shape, float("Inf"), device=pred.device, dtype=pred.dtype))
+        if gt_mask is not None:
+            gt = torch.where(gt_mask.unsqueeze(-1), gt, torch.full(gt.shape, float("Inf"), device=gt.device, dtype=gt.dtype))
+        
         pred2gt, gt2pred = nndistance(pred, gt)
 
         if self.__threshold is not None:
@@ -124,6 +135,11 @@ class ChamferLoss(torch.nn.Module):
                 pred2gt < forward_threshold, pred2gt, torch.zeros_like(pred2gt))
             gt2pred = torch.where(
                 gt2pred < backward_threshold, gt2pred, torch.zeros_like(gt2pred))
+
+        if pred_mask is not None:
+            pred2gt = torch.where(pred_mask, pred2gt, torch.zeros_like(pred2gt))
+        if gt_mask is not None:
+            gt2pred = torch.where(gt_mask, gt2pred, torch.zeros_like(gt2pred))
 
         # pred2gt is for each element in gt, the closest distance to this element
         pred2gt = torch.mean(pred2gt, dim=1)
