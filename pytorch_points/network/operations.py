@@ -569,23 +569,45 @@ def mean_value_coordinates(points, polygon):
         points: (B,D,N)
         polygon: (B,D,M)
     Returns:
-        epsilon: (B,N,L,K) weights for all triangles
-        simplexMask: (B,N,L) mask the enclosing triangle
-        pointMask: (B,N) mask the valid points
+        phi: (B,M,N)
     """
     D = polygon.shape[1]
     N = points.shape[-1]
     M = polygon.shape[-1]
     # (B,D,M,1) - (B,D,1,N) = (B,D,M,N)
-    e = normalize(polygon.unsqueeze(3)-points.unsqueeze(2))
+    e = normalize(polygon.unsqueeze(3)-points.unsqueeze(2), dim=1)
+    # B,M,N
+    r = torch.norm(polygon.unsqueeze(3)-points.unsqueeze(2), p=2, dim=1)
     eplus = torch.cat([e[:,:,1:,:], e[:,:,:1,:]], dim=2)
     # (B,M,N)
     cos = dot_product(e, eplus, dim=1)
     sin = cross_product_2D(e, eplus, dim=1)
     tanhalf = sin / (1+cos)
-    tanhalf_plus = torch.cat([tanhalf[:,1:,:], tanhalf[:,:1,:]], dim=1)
-    w = (tanhalf - tanhalf_plus)/torch.norm(polygon.unsqueeze(3)-points.unsqueeze(2), p=2, dim=1)
-    phi = w/torch.sum(w, dim=1, keepdim=True)
+    tanhalf_minus  = torch.cat([tanhalf[:,-1:,:], tanhalf[:,:-1,:]], dim=1)
+    w = (tanhalf_minus + tanhalf)/(r+1e-12)
+    
+    # special case: on boundary
+    mask = ((torch.abs(sin) == 0) & (cos <= 0)| (cos == -1))
+    mask_plus = torch.cat([mask[:,-1:,:], mask[:,:-1,:]], dim=1)
+    mask_point = torch.any(mask, dim=1, keepdim=True)
+    w = torch.where(mask_point, torch.zeros_like(w), w)
+    pe = polygon - torch.cat([polygon[:,:,1:], polygon[:,:,:1]],dim=2)
+    # (B,M,1)
+    dL = torch.norm(pe, p=2, dim=1).unsqueeze(-1)
+    w = torch.where(mask, 1-r/dL, w)
+    w = torch.where(mask_plus, 1-r/dL, w)
+    
+    # special case: close to polygon vertex
+    # (B,N)
+    mask = torch.lt(r, 1e-10)
+    mask_point = torch.any(mask, dim=1, keepdim=True)
+    # set all weights of those points to zero
+    w = torch.where(mask_point, torch.zeros_like(w), w)
+    # set vertex weight of those points to 1
+    w = torch.where(mask, torch.ones_like(w), w)
+    
+    # finally, normalize
+    phi = w/(torch.sum(w, dim=1, keepdim=True))
     return phi
 
 
@@ -594,7 +616,7 @@ def dot_product(tensor1, tensor2, dim=-1):
 
 def cross_product_2D(tensor1, tensor2, dim=1):
     assert(tensor1.shape[dim] == tensor2.shape[dim] and tensor1.shape[dim] == 2)
-    output = torch.narrow(tensor1, dim, 0, 1) * torch.narrow(tensor2, dim, 1, 1) - torch.narrow(tensor1, dim, 1, 0) * torch.narrow(tensor2, dim, 0, 1)
+    output = torch.narrow(tensor1, dim, 0, 1) * torch.narrow(tensor2, dim, 1, 1) - torch.narrow(tensor1, dim, 1, 1) * torch.narrow(tensor2, dim, 0, 1)
     return output.squeeze(dim)
 
 def barycentric_coordinates(points, ref_points, triangulation):
