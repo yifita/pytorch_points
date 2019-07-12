@@ -187,20 +187,22 @@ def read_ply(file, count=None):
     return points
 
 
-def save_ply_with_face_property(points, faces, property, property_max, filename, cmap_name="Set1"):
+def save_ply_with_face_property(points, faces, property, property_max, filename, cmap_name="Set1", binary=True):
     face_num = faces.shape[0]
     colors = np.full(faces.shape, 0.5)
     cmap = cm.get_cmap(cmap_name)
     for point_idx in range(face_num):
         colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
-    save_ply_with_face(points, faces, filename, colors)
+    save_ply_with_face(points, faces, filename, colors, binary=True)
 
 
-def save_ply_with_face(points, faces, filename, colors=None):
+def save_ply_with_face(points, faces, filename, colors=None, binary=True):
+    if points.shape[-1] == 2:
+        points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
     vertex = np.array([tuple(p) for p in points], dtype=[
                       ('x', 'f4'), ('y', 'f4'), ('z', 'f4')])
     faces = np.array([(tuple(p),) for p in faces], dtype=[
-                     ('vertex_indices', 'i4', (3, ))])
+                     ('vertex_indices', 'i4', (len(faces[0]), ))])
     descr = faces.dtype.descr
     if colors is not None:
         assert len(colors) == len(faces)
@@ -216,7 +218,7 @@ def save_ply_with_face(points, faces, filename, colors=None):
             faces_all[prop] = face_colors[prop]
 
     ply = plyfile.PlyData([plyfile.PlyElement.describe(
-        vertex, 'vertex'), plyfile.PlyElement.describe(faces_all, 'face')], text=False)
+        vertex, 'vertex'), plyfile.PlyElement.describe(faces_all, 'face')], text=(not binary))
     ply.write(filename)
 
 
@@ -241,7 +243,7 @@ def load(filename, count=None):
     return points
 
 
-def save_ply(points, filename, colors=None, normals=None):
+def save_ply(points, filename, colors=None, normals=None, binary=True):
     """
     save 3D/2D points to ply file
     Args:
@@ -288,13 +290,13 @@ def save_ply(points, filename, colors=None, normals=None):
             vertex_all[prop] = vertex_color[prop]
 
     ply = plyfile.PlyData(
-        [plyfile.PlyElement.describe(vertex_all, 'vertex')], text=False)
+        [plyfile.PlyElement.describe(vertex_all, 'vertex')], text=(not binary))
     if not os.path.exists(os.path.dirname(filename)):
         os.makedirs(os.path.dirname(filename))
     ply.write(filename)
 
 
-def save_ply_property(points, property, filename, property_max=None, normals=None, cmap_name='Set1'):
+def save_ply_property(points, property, filename, property_max=None, normals=None, cmap_name='Set1', binary=True):
     point_num = points.shape[0]
     colors = np.full([point_num, 3], 0.5)
     cmap = cm.get_cmap(cmap_name)
@@ -302,4 +304,4 @@ def save_ply_property(points, property, filename, property_max=None, normals=Non
         property_max = np.amax(property, axis=0)
     for point_idx in range(point_num):
         colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
-    save_ply(points, filename, colors, normals)
+    save_ply(points, filename, colors, normals, binary)
