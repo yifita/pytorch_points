@@ -582,7 +582,7 @@ def mean_value_coordinates(points, polygon):
     # (B,M,N)
     cos = dot_product(e, eplus, dim=1)
     sin = cross_product_2D(e, eplus, dim=1)
-    tanhalf = sin / (1+cos)
+    tanhalf = sin / (1+cos+1e-12)
     tanhalf_minus  = torch.cat([tanhalf[:,-1:,:], tanhalf[:,:-1,:]], dim=1)
     w = (tanhalf_minus + tanhalf)/(r+1e-12)
     
@@ -607,7 +607,10 @@ def mean_value_coordinates(points, polygon):
     w = torch.where(mask, torch.ones_like(w), w)
     
     # finally, normalize
-    phi = w/(torch.sum(w, dim=1, keepdim=True))
+    sumW = torch.sum(w, dim=1, keepdim=True)
+    # sometimes sumw is 0?!
+    torch.where(sumW==0, torch.ones_like(w), w)
+    phi = w/sumW
     return phi
 
 

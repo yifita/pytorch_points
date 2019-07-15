@@ -145,8 +145,10 @@ class Conv2d(nn.Module):
                 self.act = nn.ELU(alpha=1.0)
             elif self.activation == 'lrelu':
                 self.act = nn.LeakyReLU(0.1)
+            elif self.activation == "tanh":
+                self.act = nn.Tanh()
             else:
-                raise ValueError("only \"relu/elu/lrelu\" allowed")
+                raise ValueError("only \"relu/elu/lrelu/tanh\" implemented")
 
     def forward(self, x, epoch=None):
         x = self.conv(x)
@@ -191,8 +193,10 @@ class Conv1d(nn.Module):
                 self.act = nn.ELU(alpha=1.0)
             elif self.activation == 'lrelu':
                 self.act = nn.LeakyReLU(0.1)
+            elif self.activation == "tanh":
+                self.act = nn.Tanh()
             else:
-                raise ValueError("only \"relu/elu/lrelu\" allowed")
+                raise ValueError("only \"relu/elu/lrelu/tanh\" implemented")
 
     def forward(self, x, epoch=None):
         x = self.conv(x)
@@ -205,6 +209,51 @@ class Conv1d(nn.Module):
 
         return x
 
+class Linear(nn.Module):
+    """1dconvolution with custom normalization and activation"""
+
+    def __init__(self, in_channels, out_channels, bias=True,
+                 activation=None, normalization=None, momentum=0.01):
+        super(Linear, self).__init__()
+        self.activation = activation
+        self.normalization = normalization
+        bias = not normalization and bias
+        self.linear = nn.Linear(in_channels, out_channels, bias=bias)
+
+        if normalization is not None:
+            if self.normalization == 'batch':
+                self.norm = nn.BatchNorm1d(
+                    out_channels, affine=True, eps=0.001, momentum=momentum)
+            elif self.normalization == 'instance':
+                self.norm = nn.InstanceNorm1d(
+                    out_channels, affine=True, eps=0.001, momentum=momentum)
+            else:
+                raise ValueError(
+                    "only \"batch/instance\" normalization permitted.")
+
+        # activation
+        if activation is not None:
+            if self.activation == 'relu':
+                self.act = nn.ReLU()
+            elif self.activation == 'elu':
+                self.act = nn.ELU(alpha=1.0)
+            elif self.activation == 'lrelu':
+                self.act = nn.LeakyReLU(0.1)
+            elif self.activation == "tanh":
+                self.act = nn.Tanh()
+            else:
+                raise ValueError("only \"relu/elu/lrelu/tanh\" implemented")
+
+    def forward(self, x, epoch=None):
+        x = self.linear(x)
+
+        if self.normalization is not None:
+            x = self.norm(x)
+
+        if self.activation is not None:
+            x = self.act(x)
+
+        return x
 
 class ShuffleBlock(nn.Module):
     def __init__(self, groups=2):

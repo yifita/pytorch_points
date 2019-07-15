@@ -41,7 +41,7 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, numVerts) 
         r_i = clip( random.gauss(aveRadius, spikeyness), 0, 2*aveRadius )
         x = ctrX + r_i*math.cos(angle)
         y = ctrY + r_i*math.sin(angle)
-        points.append( (int(x),int(y)) )
+        points.append((x,y))
 
         angle = angle + angleSteps[i]
 

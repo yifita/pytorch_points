@@ -3,16 +3,22 @@ import numpy as np
 import os
 from collections import OrderedDict
 
+def check_values(tensor):
+    """return true if tensor doesn't contain NaN or Inf"""
+    return not (torch.any(torch.isnan(tensor)).item() or torch.any(torch.isinf(tensor)).item())
+
+
 def weights_init(m):
     """
     initialize the weighs of the network for Convolutional layers and batchnorm layers
     """
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        m.weight.data.normal_(0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
-        m.weight.data.normal_(1.0, 0.02)
-        m.bias.data.fill_(0)
+    if isinstance(m, (torch.nn.modules.conv._ConvNd, torch.nn.Linear)):
+        torch.nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            torch.nn.init.constant_(m.bias, 0.0)
+    elif isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+        torch.nn.init.constant_(m.bias, 0.0)
+        torch.nn.init.constant_(m.weight, 1.0)
 
 def save_network(net, directory, network_label, epoch_label=None, **kwargs):
     save_filename = "_".join((network_label, str(epoch_label))) + ".pth"
