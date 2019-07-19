@@ -578,19 +578,20 @@ class UniformLaplacian(torch.nn.Module):
     
         offset = torch.arange(0, self.batch).reshape(-1, 1, 1) * self.nv
         faces = self.faces + offset
-        faces = faces.reshape(-1, 3)
+        faces = faces.reshape(-1, self.face_deg)
         # offset index by batch
         row = faces[:, [i for i in range(self.face_deg)]].reshape(-1)
         col = faces[:, [i for i in range(1, self.face_deg)]+[0]].reshape(-1)
         indices = torch.stack([row, col], dim=0)
         L = torch.sparse_coo_tensor(indices, -torch.ones_like(col, dtype=torch.float), size=[self.nv*self.batch, self.nv*self.batch])
         L = L.t() + L
-        self.Lii = -torch.sparse.sum(L, dim=[1]).to_dense()
+        Lii = -torch.sparse.sum(L, dim=[1]).to_dense()
         M = torch.sparse_coo_tensor(torch.arange(self.nv*self.batch).unsqueeze(0).expand(2, -1), self.Lii, size=(self.nv*self.batch, self.nv*self.batch))
         L = L + M
         # need to divide by diagonal, but can't do it in sparse
 
         self.register_buffer('L', L)
+        self.register_buffer('Lii', Lii)
 
     def forward(self, verts):
         assert(verts.shape[0] == self.batch)
@@ -601,7 +602,7 @@ class UniformLaplacian(torch.nn.Module):
         x = x / (self.Lii.unsqueeze(-1)+1e-12)
         x = x.reshape([self.batch, self.nv, -1])
         return x
-        
+
 #############
 ### cotangent laplacian from 3D-coded ###
 #############
@@ -687,10 +688,6 @@ class CotLaplacian(torch.autograd.Function):
         Lg = self.L.dot(g_o).reshape(grad_out.shape)
 
         return convert_as(torch.Tensor(Lg), grad_out)
-
-#############
-### cotangent laplacian from 3D-coded ###
-#############
 
 def cotangent(V, F):
     """

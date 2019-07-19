@@ -4,7 +4,22 @@ from .._ext import losses
 from . import operations
 
 
-class LaplacianLoss(torch.nn.Module):
+class MeshLaplacianLoss(torch.nn.Module):
+    """
+    compare uniform laplacian of two meshes
+    num_point: number of vertices
+    faces: (B,F,L) face indices
+    metric: a module e.g. L1Loss
+    """
+    def __init__(self, num_point, faces, metric):
+        super().__init__()
+        self.laplacian = operations.UniformLaplacian(faces, num_point)
+        self.metric = metric
+    
+    def forward(self, vert1, vert2):
+        return self.metric(self.laplacian(vert1), self.laplacian(vert2))
+
+class LaplacianSmoothnessLoss(object):
     """
     Encourages minimal mean curvature shapes.
     """
