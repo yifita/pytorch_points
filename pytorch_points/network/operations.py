@@ -6,6 +6,7 @@ https://github.com/erikwijmans/Pointnet2_PyTorch
 import torch
 import faiss
 import numpy as np
+from scipy import sparse
 from threading import Thread
 
 from .._ext import sampling
@@ -561,6 +562,173 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True):
 def normalize(tensor, dim=-1):
     """normalize tensor in specified dimension"""
     return torch.nn.functional.normalize(tensor, p=2, dim=dim, eps=1e-12, out=None)
+
+
+class UniformLaplacian(torch.nn.Module):
+    """
+    uniform laplacian for mesh
+    vertex B,N,D
+    faces  B,F,L
+    """
+    def __init__(self, faces, nv):
+        super().__init__()
+        self.batch, self.nf, self.face_deg = faces.shape
+        self.faces = faces
+        self.nv = nv
+    
+        offset = torch.arange(0, self.batch).reshape(-1, 1, 1) * self.nv
+        faces = self.faces + offset
+        faces = faces.reshape(-1, 3)
+        # offset index by batch
+        row = faces[:, [i for i in range(self.face_deg)]].reshape(-1)
+        col = faces[:, [i for i in range(1, self.face_deg)]+[0]].reshape(-1)
+        indices = torch.stack([row, col], dim=0)
+        L = torch.sparse_coo_tensor(indices, -torch.ones_like(col, dtype=torch.float), size=[self.nv*self.batch, self.nv*self.batch])
+        L = L.t() + L
+        self.Lii = -torch.sparse.sum(L, dim=[1]).to_dense()
+        M = torch.sparse_coo_tensor(torch.arange(self.nv*self.batch).unsqueeze(0).expand(2, -1), self.Lii, size=(self.nv*self.batch, self.nv*self.batch))
+        L = L + M
+        # need to divide by diagonal, but can't do it in sparse
+
+        self.register_buffer('L', L)
+
+    def forward(self, verts):
+        assert(verts.shape[0] == self.batch)
+        assert(verts.shape[1] == self.nv)
+        
+        verts = verts.reshape(-1, verts.shape[-1])
+        x = self.L.mm(verts)
+        x = x / (self.Lii.unsqueeze(-1)+1e-12)
+        x = x.reshape([self.batch, self.nv, -1])
+        return x
+        
+#############
+### cotangent laplacian from 3D-coded ###
+#############
+def convert_as(src, trg):
+    src = src.type_as(trg)
+    if src.is_cuda:
+        src = src.cuda(device=trg.get_device())
+    return src
+
+class CotLaplacian(torch.autograd.Function):
+    def __init__(self, faces):
+        """
+        Faces is B x F x 3, cuda torch Variabe.
+        Reuse faces.
+        """
+        self.F_np = faces.data.cpu().numpy()
+        self.F = faces.data
+        self.L = None
+    
+    def forward(self, V):
+        """
+        If forward is explicitly called, V is still a Parameter or Variable
+        But if called through __call__ it's a tensor.
+        This assumes __call__ was used.
+        
+        Input:
+           V: B x N x 3
+           F: B x F x 3
+        Outputs: L x B x N x 3
+        
+        Numpy also doesnt support sparse tensor, so stack along the batch
+        """
+
+        V_np = V.cpu().numpy()
+        batchV = V_np.reshape(-1, 3)
+
+        if self.L is None:
+            print('Computing the Laplacian!')
+            # Compute cotangents
+            C = cotangent(V, self.F)
+            C_np = C.cpu().numpy()
+            batchC = C_np.reshape(-1, 3)
+            # Adjust face indices to stack:
+            offset = np.arange(0, V.size(0)).reshape(-1, 1, 1) * V.size(1)
+            F_np = self.F_np + offset
+            batchF = F_np.reshape(-1, 3)
+
+            rows = batchF[:, [1, 2, 0]].reshape(-1) #1,2,0 i.e to vertex 2-3 associate cot(23)
+            cols = batchF[:, [2, 0, 1]].reshape(-1) #2,0,1 This works because triangles are oriented ! (otherwise 23 could be associated to more than 1 cot))
+
+            # Final size is BN x BN
+            BN = batchV.shape[0]
+            L = sparse.csr_matrix((batchC.reshape(-1), (rows, cols)), shape=(BN,BN))
+            L = L + L.T
+            # np.sum on sparse is type 'matrix', so convert to np.array
+            M = sparse.diags(np.array(np.sum(L, 1)).reshape(-1), format='csr')
+            L = L - M
+            # remember this
+            self.L = L
+            # TODO The normalization by the size of the voronoi cell is missing.
+            # import matplotlib.pylab as plt
+            # plt.ion()
+            # plt.clf()
+            # plt.spy(L)
+            # plt.show()
+            # import ipdb; ipdb.set_trace()
+
+        Lx = self.L.dot(batchV).reshape(V_np.shape)
+
+        return convert_as(torch.Tensor(Lx), V)
+
+    def backward(self, grad_out):
+        """
+        Just L'g = Lg
+        Args:
+           grad_out: B x N x 3
+        Returns:
+           grad_vertices: B x N x 3
+        """
+        g_o = grad_out.cpu().numpy()
+        # Stack
+        g_o = g_o.reshape(-1, 3)
+        Lg = self.L.dot(g_o).reshape(grad_out.shape)
+
+        return convert_as(torch.Tensor(Lg), grad_out)
+
+#############
+### cotangent laplacian from 3D-coded ###
+#############
+
+def cotangent(V, F):
+    """
+    Input:
+      V: B x N x 3
+      F: B x F x 3
+    Outputs:
+      C: B x F x 3 list of cotangents corresponding
+        angles for triangles, columns correspond to edges 23,31,12
+    B x F x 3 x 3
+    """
+    indices_repeat = torch.stack([F, F, F], dim=2)
+
+    #v1 is the list of first triangles B*F*3, v2 second and v3 third
+    v1 = torch.gather(V, 1, indices_repeat[:, :, :, 0].long())
+    v2 = torch.gather(V, 1, indices_repeat[:, :, :, 1].long())
+    v3 = torch.gather(V, 1, indices_repeat[:, :, :, 2].long())
+
+    l1 = torch.sqrt(((v2 - v3)**2).sum(2)) #distance of edge 2-3 for every face B*F
+    l2 = torch.sqrt(((v3 - v1)**2).sum(2))
+    l3 = torch.sqrt(((v1 - v2)**2).sum(2))
+
+    # semiperimieters
+    sp = (l1 + l2 + l3) * 0.5
+
+    # Heron's formula for area #FIXME why the *2 ? Heron formula is without *2 It's the 0.5 than appears in the (0.5(cotalphaij + cotbetaij))
+    A = 2*torch.sqrt( sp * (sp-l1)*(sp-l2)*(sp-l3))
+
+    # Theoreme d Al Kashi : c2 = a2 + b2 - 2ab cos(angle(ab))
+    cot23 = (l2**2 + l3**2 - l1**2)
+    cot31 = (l1**2 + l3**2 - l2**2)
+    cot12 = (l1**2 + l2**2 - l3**2)
+
+    # 2 in batch #proof page 98 http://www.cs.toronto.edu/~jacobson/images/alec-jacobson-thesis-2013-compressed.pdf
+    C = torch.stack([cot23, cot31, cot12], 2) / torch.unsqueeze(A, 2) / 4
+
+    return C
+
 
 def mean_value_coordinates(points, polygon):
     """
