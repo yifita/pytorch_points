@@ -563,6 +563,22 @@ def normalize(tensor, dim=-1):
     """normalize tensor in specified dimension"""
     return torch.nn.functional.normalize(tensor, p=2, dim=dim, eps=1e-12, out=None)
 
+def pointUniformLaplacian(points, neighbor_idx=None, nn_size=3):
+    """
+    Args:
+        points: (B, N, 3)
+    Returns:
+        laplacian: (B, N, 1)
+    """
+    batch_size, num_points, _ = points.shape
+    if neighbor_idx is None:
+        # find neighborhood, (B,N,K,3), (B,N,K)
+        group_points, knn_idx, _ = faiss_knn(nn_size+1, points, points, NCHW=False)
+        knn_idx = knn_idx[:, :, 1:]
+
+    lap = -torch.sum(group_points, dim=2)/knn_idx.shape[2] + points
+    return lap, knn_idx
+
 
 class UniformLaplacian(torch.nn.Module):
     """
@@ -586,10 +602,9 @@ class UniformLaplacian(torch.nn.Module):
         L = torch.sparse_coo_tensor(indices, -torch.ones_like(col, dtype=torch.float), size=[self.nv*self.batch, self.nv*self.batch])
         L = L.t() + L
         Lii = -torch.sparse.sum(L, dim=[1]).to_dense()
-        M = torch.sparse_coo_tensor(torch.arange(self.nv*self.batch).unsqueeze(0).expand(2, -1), self.Lii, size=(self.nv*self.batch, self.nv*self.batch))
+        M = torch.sparse_coo_tensor(torch.arange(self.nv*self.batch).unsqueeze(0).expand(2, -1), Lii, size=(self.nv*self.batch, self.nv*self.batch))
         L = L + M
         # need to divide by diagonal, but can't do it in sparse
-
         self.register_buffer('L', L)
         self.register_buffer('Lii', Lii)
 
@@ -662,13 +677,6 @@ class CotLaplacian(torch.autograd.Function):
             L = L - M
             # remember this
             self.L = L
-            # TODO The normalization by the size of the voronoi cell is missing.
-            # import matplotlib.pylab as plt
-            # plt.ion()
-            # plt.clf()
-            # plt.spy(L)
-            # plt.show()
-            # import ipdb; ipdb.set_trace()
 
         Lx = self.L.dot(batchV).reshape(V_np.shape)
 
