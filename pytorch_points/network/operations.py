@@ -563,18 +563,20 @@ def normalize(tensor, dim=-1):
     """normalize tensor in specified dimension"""
     return torch.nn.functional.normalize(tensor, p=2, dim=dim, eps=1e-12, out=None)
 
-def pointUniformLaplacian(points, neighbor_idx=None, nn_size=3):
+def pointUniformLaplacian(points, knn_idx=None, nn_size=3):
     """
     Args:
         points: (B, N, 3)
+        knn_idx: (B, N, K)
     Returns:
         laplacian: (B, N, 1)
     """
     batch_size, num_points, _ = points.shape
-    if neighbor_idx is None:
+    if knn_idx is None:
         # find neighborhood, (B,N,K,3), (B,N,K)
         group_points, knn_idx, _ = faiss_knn(nn_size+1, points, points, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
+        group_points = group_points[:, :, 1:, :]
 
     lap = -torch.sum(group_points, dim=2)/knn_idx.shape[2] + points
     return lap, knn_idx

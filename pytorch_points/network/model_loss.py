@@ -6,10 +6,10 @@ from . import operations
 
 class MeshLaplacianLoss(torch.nn.Module):
     """
-    compare uniform laplacian of two meshes
+    compare uniform laplacian of two meshes assuming known correspondence
     num_point: number of vertices
     faces: (B,F,L) face indices
-    metric: a module e.g. L1Loss
+    metric: an instance of a module e.g. L1Loss
     """
     def __init__(self, num_point, faces, metric):
         super().__init__()
@@ -42,6 +42,110 @@ class LaplacianSmoothnessLoss(object):
         loss = (torch.norm(Lx, p=2, dim=1).float()-self.curve_gt).mean()
         return loss
 
+
+class SmapeLoss(torch.nn.Module):
+    """
+    relative L1 norm
+    http://drz.disneyresearch.com/~jnovak/publications/KPAL/KPAL.pdf eq(2)
+    """
+    def __init__(self, epsilon=1e-8):
+        super(SmapeLoss, self).__init__()
+        self.epsilon = epsilon
+
+    def forward(self, x, y):
+        """
+        x pred  (N,3)
+        y label (N,3)
+        """
+        return torch.mean(torch.abs(x-y)/(torch.abs(x)+torch.abs(y)+self.epsilon))
+
+
+class PointLaplacianLoss(torch.nn.Module):
+    """
+    compare uniform laplacian of two point clouds assuming known correspondence
+    metric: an instance of a module e.g. L1Loss
+    """
+    def __init__(self, nn_size, metric):
+        super().__init__()
+        self.metric = metric
+        self.nn_size = nn_size
+
+    def forward(self, point1, point2):
+        """
+        point1: (B,N,D) ref points (where connectivity is computed)
+        point2: (B,N,D) pred points, uses connectivity of point1
+        """
+        lap1, knn_idx = operations.pointUniformLaplacian(point1, nn_size=nn_size)
+        lap2, _ = operations.pointUniformLaplacian(point2, knn_idx=knn_idx)
+        return self.metric(lap1, lap2)
+
+
+class PointEdgeLengthLoss(torch.nn.Module):
+    """
+    compare uniform laplacian of two point clouds assuming known correspondence
+    metric: an instance of a module e.g. L1Loss
+    """
+    def __init__(self, nn_size, metric):
+        super().__init__()
+        self.metric = metric
+        self.nn_size = nn_size
+
+    def forward(self, points1, points2):
+        """
+        point1: (B,N,D) ref points (where connectivity is computed)
+        point2: (B,N,D) pred points, uses connectivity of point1
+        """
+        # find neighborhood, (B,N,K,3), (B,N,K)
+        _, knn_idx, dist1 = faiss_knn(self.nn_size+1, points1, points1, NCHW=False)
+        knn_idx = knn_idx[:, :, 1:]
+        group_points2 = torch.gather(points2.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points2.shape[-1]))
+        dist2 = torch.norm(group_points2 - points2, dim=-1, p=2)
+        return self.metric(dist1, dist2)
+
+
+class StretchLoss(torch.nn.Module):
+    """
+    penalize stretch only max(d/d_ref-1, 0)
+    """
+    def __init__(self, nn_size):
+        super().__init__()
+    def forward(self, points, points_ref, nn_size):
+        """
+        point1: (B,N,D) ref points (where connectivity is computed)
+        point2: (B,N,D) pred points, uses connectivity of point1
+        """
+        # find neighborhood, (B,N,K,3), (B,N,K), (B,N,K)
+        _, knn_idx, dist_ref = faiss_knn(nn_size+1, points_ref, points_ref, NCHW=False)
+        knn_idx = knn_idx[:, :, 1:]
+        group_points = torch.gather(points.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
+        dist = torch.norm(group_points - points, dim=-1, p=2)
+        return torch.mean(torch.max(0, dist/dist_ref-1))
+
+
+class MeshEdgeLengthLoss(torch.nn.Module):
+    """
+    Penalize large edge deformation for meshes of the same topology (assuming correspondance)
+    """
+    def __init__(self, metric):
+        super().__init__(self)
+        self.metric = metric 
+
+    def forward(self, verts1, verts2, faces=None):
+        """
+        verts1: (B, N, 3)
+        verts2: (B, N, 3)
+        faces:  (B, F, L)
+        """
+        F = faces.shape[1]
+        # (B, F, N, 3)
+        face_verts1 = torch.gather(verts1.unsqueeze(1).expand(-1, F, -1, -1), 2, faces.unsqueeze(-1).expand(-1, -1, -1, verts1.shape[-1]))
+        face_verts2 = torch.gather(verts2.unsqueeze(1).expand(-1, F, -1, -1), 2, faces.unsqueeze(-1).expand(-1, -1, -1, verts2.shape[-1]))
+        edge1 = face_verts1[:, :, [i for i in range(F)]]-face_verts1[:, :, [i for i in range(1, self.face_deg)]+[0]]
+        edge2 = face_verts2[:, :, [i for i in range(F)]]-face_verts2[:, :, [i for i in range(1, self.face_deg)]+[0]]
+        # distance
+        d1 = edge1 * edge1 
+        d2 = edge2 * edge2
+        return self.metric(d1, d2)
 
 class NormalLoss(torch.nn.Module):
     def __init__(self, nn_size=10):
