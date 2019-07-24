@@ -90,17 +90,22 @@ class PointEdgeLengthLoss(torch.nn.Module):
         self.metric = metric
         self.nn_size = nn_size
 
-    def forward(self, points1, points2):
+    def forward(self, points_ref, points):
         """
         point1: (B,N,D) ref points (where connectivity is computed)
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K)
-        _, knn_idx, dist1 = faiss_knn(self.nn_size+1, points1, points1, NCHW=False)
+        group_points, knn_idx, _ = operations.faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
-        group_points2 = torch.gather(points2.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points2.shape[-1]))
-        dist2 = torch.norm(group_points2 - points2, dim=-1, p=2)
-        return self.metric(dist1, dist2)
+        group_points= group_points[:,:,1:,:]
+        dist_ref = torch.norm(group_points - points_ref.unsqueeze(2), dim=-1, p=2)
+        # dist_ref = torch.sqrt(dist_ref)
+        # B,N,K,D
+        group_points = torch.gather(points.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
+        dist = torch.norm(group_points - points.unsqueeze(2), dim=-1, p=2)
+        # print(group_points, group_points2)
+        return self.metric(dist_ref, dist)
 
 
 class StretchLoss(torch.nn.Module):
@@ -109,16 +114,19 @@ class StretchLoss(torch.nn.Module):
     """
     def __init__(self, nn_size):
         super().__init__()
-    def forward(self, points, points_ref, nn_size):
+        self.nn_size = nn_size
+    def forward(self, points_ref, points):
         """
         point1: (B,N,D) ref points (where connectivity is computed)
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K), (B,N,K)
-        _, knn_idx, dist_ref = faiss_knn(nn_size+1, points_ref, points_ref, NCHW=False)
+        group_points_ref, knn_idx, _ = operations.faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
+        group_points_ref = group_points_ref[:,:,1:,:]
+        dist_ref = torch.norm(group_points_ref - points_ref.unsqueeze(2), dim=-1, p=2)
         group_points = torch.gather(points.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
-        dist = torch.norm(group_points - points, dim=-1, p=2)
+        dist = torch.norm(group_points - points.unsqueeze(2), dim=-1, p=2)
         return torch.mean(torch.max(0, dist/dist_ref-1))
 
 
@@ -294,14 +302,18 @@ class ChamferLoss(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    pc1 = torch.randn([2, 600, 2], dtype=torch.float64,
+    pc1 = torch.randn([2, 600, 2], dtype=torch.float32,
                       requires_grad=True).cuda()
-    pc2 = torch.randn([2, 600, 2], dtype=torch.float64,
+    pc2 = torch.randn([2, 600, 2], dtype=torch.float32,
                       requires_grad=True).cuda()
     chamfer = ChamferLoss()
-    from torch.autograd import gradcheck
+    edgeLoss = PointEdgeLengthLoss(nn_size=3, metric=torch.nn.MSELoss())
+    edgeShouldBeZero = edgeLoss(pc1, pc1)
+    print(edgeShouldBeZero)
+    assert(torch.all(edgeShouldBeZero == 0))
     # test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
     # print(test)
-    pc2 = pc2.detach()
-    test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
-    print(test)
+    # from torch.autograd import gradcheck
+    # pc2 = pc2.detach()
+    # test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
+    # print(test)

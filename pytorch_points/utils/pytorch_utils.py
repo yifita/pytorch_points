@@ -21,6 +21,15 @@ def weights_init(m):
         torch.nn.init.constant_(m.weight, 1.0)
 
 def save_network(net, directory, network_label, epoch_label=None, **kwargs):
+    """
+    save model to directory with name {network_label}_{epoch_label}.pth
+    Args:
+        net: pytorch model
+        directory: output directory
+        network_label: str
+        epoch_label: convertible to str
+        kwargs: additional value to be included
+    """
     save_filename = "_".join((network_label, str(epoch_label))) + ".pth"
     save_path = os.path.join(directory, save_filename)
     merge_states = OrderedDict()
