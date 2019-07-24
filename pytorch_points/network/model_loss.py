@@ -127,7 +127,8 @@ class StretchLoss(torch.nn.Module):
         dist_ref = torch.norm(group_points_ref - points_ref.unsqueeze(2), dim=-1, p=2)
         group_points = torch.gather(points.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
         dist = torch.norm(group_points - points.unsqueeze(2), dim=-1, p=2)
-        return torch.mean(torch.max(0, dist/dist_ref-1))
+        stretch, _ = torch.max(dist/dist_ref-1, torch.zeros_like(dist))
+        return torch.mean(stretch)
 
 
 class MeshEdgeLengthLoss(torch.nn.Module):
