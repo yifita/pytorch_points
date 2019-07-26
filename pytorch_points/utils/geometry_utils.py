@@ -1,4 +1,5 @@
 import numpy as np
+import random
 
 def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, numVerts) :
     '''Start with the centre of the polygon at ctrX, ctrY, 
@@ -37,7 +38,7 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, numVerts) 
     # now generate the points
     points = []
     # angle = random.uniform(0, 2*np.pi)
-    angle = 0
+    angle = 5*np.pi/6
     for i in range(numVerts) :
         r_i = np.clip(np.random.normal(aveRadius, spikeyness), 0, 2*aveRadius )
         x = ctrX + r_i*np.cos(angle)

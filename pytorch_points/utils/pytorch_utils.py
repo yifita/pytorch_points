@@ -3,6 +3,12 @@ import numpy as np
 import os
 from collections import OrderedDict
 
+saved_variables = {}
+def save_grad(name):
+    def hook(grad):
+        saved_variables[name] = grad
+    return hook
+
 def check_values(tensor):
     """return true if tensor doesn't contain NaN or Inf"""
     return not (torch.any(torch.isnan(tensor)).item() or torch.any(torch.isinf(tensor)).item())

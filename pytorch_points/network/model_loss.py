@@ -2,7 +2,7 @@ import torch
 from threading import Thread
 from .._ext import losses
 from . import operations
-
+from ..utils.pytorch_utils import save_grad
 
 class MeshLaplacianLoss(torch.nn.Module):
     """
@@ -13,11 +13,14 @@ class MeshLaplacianLoss(torch.nn.Module):
     """
     def __init__(self, num_point, faces, metric):
         super().__init__()
-        self.laplacian = operations.UniformLaplacian(faces, num_point)
+        self.laplacian1 = operations.UniformLaplacian(faces, num_point)
+        self.laplacian2 = operations.UniformLaplacian(faces, num_point)
         self.metric = metric
     
     def forward(self, vert1, vert2):
-        return self.metric(self.laplacian(vert1), self.laplacian(vert2))
+        lap1 = self.laplacian1(vert1)
+        lap2 = self.laplacian2(vert2)
+        return self.metric(lap1, lap2)
 
 class LaplacianSmoothnessLoss(object):
     """
@@ -112,9 +115,11 @@ class StretchLoss(torch.nn.Module):
     """
     penalize stretch only max(d/d_ref-1, 0)
     """
-    def __init__(self, nn_size):
+    def __init__(self, nn_size, reduction="mean"):
         super().__init__()
         self.nn_size = nn_size
+        self.reduction
+        
     def forward(self, points_ref, points):
         """
         point1: (B,N,D) ref points (where connectivity is computed)
@@ -128,7 +133,14 @@ class StretchLoss(torch.nn.Module):
         group_points = torch.gather(points.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
         dist = torch.norm(group_points - points.unsqueeze(2), dim=-1, p=2)
         stretch = torch.max(dist/dist_ref-1, torch.zeros_like(dist))
-        return torch.mean(stretch)
+        if self.reduction == "mean":
+            return torch.mean(stretch)
+        elif self.reduction == "sum":
+            return torch.sum(stretch)
+        elif "none":
+            return stretch
+        else:
+            raise NotImplementedError
 
 
 class MeshEdgeLengthLoss(torch.nn.Module):
@@ -214,12 +226,13 @@ class ChamferLoss(torch.nn.Module):
         percentage (float): consider a percentage of inner points
     """
 
-    def __init__(self, threshold=None, forward_weight=1.0, percentage=1.0):
+    def __init__(self, threshold=None, forward_weight=1.0, percentage=1.0, reduction="mean"):
         super(ChamferLoss, self).__init__()
         # only consider distance smaller than threshold*mean(distance) (remove outlier)
         self.__threshold = threshold
         self.forward_weight = forward_weight
         self.percentage = percentage
+        self.reduction = reduction
 
     def set_threshold(self, value):
         self.__threshold = value
@@ -298,7 +311,14 @@ class ChamferLoss(torch.nn.Module):
         gt2pred = torch.mean(gt2pred, dim=1)
         CD_dist = self.forward_weight * pred2gt + gt2pred
         # CD_dist_norm = CD_dist/radius
-        cd_loss = torch.mean(CD_dist)
+        if self.reduction == "mean":
+            cd_loss = torch.mean(CD_dist)
+        elif self.reduction == "sum":
+            cd_loss = torch.sum(CD_dist)
+        elif self.reduction is "none":
+            cd_loss = CD_dist
+        else:
+            raise NotImplementedError
         return cd_loss
 
 

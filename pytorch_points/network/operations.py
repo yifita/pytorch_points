@@ -771,7 +771,6 @@ def mean_value_coordinates(points, polygon):
     dL = torch.norm(pe, p=2, dim=1).unsqueeze(-1)
     w = torch.where(mask, 1-r/dL, w)
     w = torch.where(mask_plus, 1-r/dL, w)
-    
     # special case: close to polygon vertex
     # (B,N)
     mask = torch.lt(r, 1e-10)
@@ -784,7 +783,7 @@ def mean_value_coordinates(points, polygon):
     # finally, normalize
     sumW = torch.sum(w, dim=1, keepdim=True)
     # sometimes sumw is 0?!
-    torch.where(sumW==0, torch.ones_like(w), w)
+    # sumW = torch.where(sumW==0, torch.ones_like(w), w)
     phi = w/sumW
     return phi
 
