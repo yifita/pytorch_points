@@ -118,7 +118,7 @@ class StretchLoss(torch.nn.Module):
     def __init__(self, nn_size, reduction="mean"):
         super().__init__()
         self.nn_size = nn_size
-        self.reduction
+        self.reduction = reduction
         
     def forward(self, points_ref, points):
         """
