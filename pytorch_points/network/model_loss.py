@@ -45,6 +45,26 @@ class LaplacianSmoothnessLoss(object):
         loss = (torch.norm(Lx, p=2, dim=1).float()-self.curve_gt).mean()
         return loss
 
+class UniformLaplacianSmoothnessLoss(torch.nn.Module):
+    """
+    Encourages minimal mean curvature shapes.
+    """
+    def __init__(self, num_point, faces, metric):
+        super().__init__()
+        self.laplacian = operations.UniformLaplacian(faces, num_point)
+        self.metric = metric
+    
+    def __call__(self, vert, vert_ref=None):
+        lap = self.laplacian(vert)
+        curve = torch.norm(lap, p=2, dim=-1)
+        if vert_ref is not None:
+            lap_ref = self.laplacian(vert)
+            curve_gt = torch.norm(lap_ref, p=2, dim=-1)
+            loss = self.metric(curve, curve_gt)
+        else:
+            loss = curve
+        return loss
+
 
 class SmapeLoss(torch.nn.Module):
     """
