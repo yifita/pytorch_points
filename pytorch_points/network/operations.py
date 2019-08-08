@@ -769,9 +769,9 @@ def mean_value_coordinates(points, polygon):
     # Dim = torch.cat([Di[:,-1:,:], Di[:,:-1,:]], dim=1)
     # tanhalf = sin / (1+cos+1e-12)
     # w = torch.where(Ai!=0, (rip - Di/ri)/Ai, torch.zeros_like(Ai))+ torch.where(Aim!=0, (rim-Dim/ri)/Aim)
-    tanhalf = torch.where(torch.abs(Ai) > 1e-5, (rip*ri-Di)/Ai, torch.zeros_like(Ai))
+    tanhalf = torch.where(torch.abs(Ai) > 1e-5, (rip*ri-Di)/(Ai+1e-10), torch.zeros_like(Ai))
     tanhalf_minus  = torch.cat([tanhalf[:,-1:,:], tanhalf[:,:-1,:]], dim=1)
-    w = (tanhalf_minus + tanhalf)/ri
+    w = (tanhalf_minus + tanhalf)/(ri+1e-10)
 
     # special case: on boundary
     # mask = ((torch.abs(sin) == 0) & (cos <= 0)| (cos == -1))
@@ -782,7 +782,7 @@ def mean_value_coordinates(points, polygon):
     pe = polygon - torch.cat([polygon[:,:,1:], polygon[:,:,:1]],dim=2)
     # (B,M,1)
     dL = torch.norm(pe, p=2, dim=1).unsqueeze(-1)
-    w = torch.where(mask, 1-ri/dL, w)
+    w = torch.where(mask, 1-ri/(dL+1e-10), w)
     # w = torch.where(mask_plus, 1-ri/dL, w)
     w = torch.where(mask_plus, 1-torch.sum(w, dim=1, keepdim=True), w)
     # special case: close to polygon vertex
