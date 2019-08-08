@@ -750,30 +750,45 @@ def mean_value_coordinates(points, polygon):
     N = points.shape[-1]
     M = polygon.shape[-1]
     # (B,D,M,1) - (B,D,1,N) = (B,D,M,N)
-    e = normalize(polygon.unsqueeze(3)-points.unsqueeze(2), dim=1)
+    si = polygon.unsqueeze(3)-points.unsqueeze(2)
+    # ei = normalize(s, dim=1)
     # B,M,N
-    r = torch.norm(polygon.unsqueeze(3)-points.unsqueeze(2), p=2, dim=1)
-    eplus = torch.cat([e[:,:,1:,:], e[:,:,:1,:]], dim=2)
+    ri = torch.norm(si, p=2, dim=1)
+    rip = torch.cat([ri[:,1:,:], ri[:,:1,:]], dim=1)
+    sip = torch.cat([si[:,:,1:,:], si[:,:,:1,:]], dim=2)
+    # sip = si[:,:,[i%M+1 for i in range(M)], :]
     # (B,M,N)
-    cos = dot_product(e, eplus, dim=1)
-    sin = cross_product_2D(e, eplus, dim=1)
-    tanhalf = sin / (1+cos+1e-12)
+    # cos = dot_product(e, eplus, dim=1)
+    # sin = cross_product_2D(e, eplus, dim=1)
+    # (r_i*r_{i+1}-D_i)/A_i
+    # D_i <e_i, e_{i+1}>
+    # A_i det(e_i, e_{i+1})/2
+    Ai = cross_product_2D(si, sip, dim=1)/2
+    Aim = torch.cat([Ai[:,-1:,:], Ai[:,:-1,:]], dim=1)
+    Di = dot_product(si, sip, dim=1)
+    # Dim = torch.cat([Di[:,-1:,:], Di[:,:-1,:]], dim=1)
+    # tanhalf = sin / (1+cos+1e-12)
+    # w = torch.where(Ai!=0, (rip - Di/ri)/Ai, torch.zeros_like(Ai))+ torch.where(Aim!=0, (rim-Dim/ri)/Aim)
+    tanhalf = torch.where(torch.abs(Ai) > 1e-5, (rip*ri-Di)/Ai, torch.zeros_like(Ai))
     tanhalf_minus  = torch.cat([tanhalf[:,-1:,:], tanhalf[:,:-1,:]], dim=1)
-    w = (tanhalf_minus + tanhalf)/(r+1e-12)
-    
+    w = (tanhalf_minus + tanhalf)/ri
+
     # special case: on boundary
-    mask = ((torch.abs(sin) == 0) & (cos <= 0)| (cos == -1))
+    # mask = ((torch.abs(sin) == 0) & (cos <= 0)| (cos == -1))
+    mask = (torch.abs(Ai) <= 1e-5) & (Di < 0.0)
     mask_plus = torch.cat([mask[:,-1:,:], mask[:,:-1,:]], dim=1)
     mask_point = torch.any(mask, dim=1, keepdim=True)
     w = torch.where(mask_point, torch.zeros_like(w), w)
     pe = polygon - torch.cat([polygon[:,:,1:], polygon[:,:,:1]],dim=2)
     # (B,M,1)
     dL = torch.norm(pe, p=2, dim=1).unsqueeze(-1)
-    w = torch.where(mask, 1-r/dL, w)
-    w = torch.where(mask_plus, 1-r/dL, w)
+    w = torch.where(mask, 1-ri/dL, w)
+    # w = torch.where(mask_plus, 1-ri/dL, w)
+    w = torch.where(mask_plus, 1-torch.sum(w, dim=1, keepdim=True), w)
     # special case: close to polygon vertex
     # (B,N)
-    mask = torch.lt(r, 1e-10)
+    mask = torch.lt(ri, 1e-8)
+    # if an cage edge is very very short, can happen that this is true for both vertices
     mask_point = torch.any(mask, dim=1, keepdim=True)
     # set all weights of those points to zero
     w = torch.where(mask_point, torch.zeros_like(w), w)
@@ -783,7 +798,8 @@ def mean_value_coordinates(points, polygon):
     # finally, normalize
     sumW = torch.sum(w, dim=1, keepdim=True)
     # sometimes sumw is 0?!
-    # sumW = torch.where(sumW==0, torch.ones_like(w), w)
+    if torch.nonzero(sumW==0).numel() > 0:
+        sumW = torch.where(sumW==0, torch.ones_like(w), w)
     phi = w/sumW
     return phi
 
