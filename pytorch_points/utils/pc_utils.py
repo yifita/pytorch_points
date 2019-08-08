@@ -259,6 +259,8 @@ def save_ply(points, filename, colors=None, normals=None, binary=True):
     desc = vertex.dtype.descr
 
     if normals is not None:
+        if normals.shape[-1] == 2:
+            normals = np.concatenate([normals, np.zeros_like(normals)[:, :1]], axis=-1)
         vertex_normal = np.core.records.fromarrays(
             normals.transpose(1, 0), names='nx, ny, nz', formats='f4, f4, f4')
         assert len(vertex_normal) == num_vertex

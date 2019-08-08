@@ -574,7 +574,7 @@ def pointUniformLaplacian(points, knn_idx=None, nn_size=3):
     batch_size, num_points, _ = points.shape
     if knn_idx is None:
         # find neighborhood, (B,N,K,3), (B,N,K)
-        group_points, knn_idx, _ = faiss_knn(nn_size+1, points, points, NCHW=False)
+        group_points, knn_idx, _ = group_knn(nn_size+1, points, points, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
         group_points = group_points[:, :, 1:, :]
 
