@@ -14,6 +14,15 @@ def check_values(tensor):
     return not (torch.any(torch.isnan(tensor)).item() or torch.any(torch.isinf(tensor)).item())
 
 
+def clamp_gradient(model, clip):
+    for p in model.parameters():
+        torch.nn.utils.clip_grad_value_(p, clip)
+
+def clamp_gradient_norm(model, max_norm, norm_type=2):
+    for p in model.parameters():
+        torch.nn.utils.clip_grad_norm_(p, max_norm, norm_type=2)
+        
+
 def weights_init(m):
     """
     initialize the weighs of the network for Convolutional layers and batchnorm layers
