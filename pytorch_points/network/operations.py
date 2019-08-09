@@ -73,52 +73,83 @@ def __swig_ptr_from_LongTensor(x):
         x.storage().data_ptr() + x.storage_offset() * 8)
 
 
-def search_index_pytorch(res, xb, xq, k, D=None, I=None,
-                         metric=faiss.METRIC_L2):
-    assert xb.device == xq.device
-    nq, d = xq.size()
-    if xq.is_contiguous():
-        xq_row_major = True
-    elif xq.t().is_contiguous():
-        xq = xq.t()    # I initially wrote xq:t(), Lua is still haunting me :-)
-        xq_row_major = False
+def search_index_pytorch(database, x, k):
+    """
+    KNN search via Faiss
+    :param
+        database BxNxC
+        x BxMxC
+    :return
+        D BxMxK
+        I BxMxK
+    """
+    Dptr = database.data_ptr()
+    is_cuda = False
+    if not (x.is_cuda or database.is_cuda):
+        index = faiss.IndexFlatL2(database.size(-1))
     else:
-        raise TypeError('matrix should be row or column-major')
+        is_cuda = True
+        index = faiss.GpuIndexFlatL2(GPU_RES, database.size(-1))  # dimension is 3
+    index.add_c(database.size(0), faiss.cast_integer_to_float_ptr(Dptr))
 
-    xq_ptr = __swig_ptr_from_FloatTensor(xq)
+    assert x.is_contiguous()
+    n, d = x.size()
+    assert d == index.d
 
-    nb, d2 = xb.size()
-    assert d2 == d
-    if xb.is_contiguous():
-        xb_row_major = True
-    elif xb.t().is_contiguous():
-        xb = xb.t()
-        xb_row_major = False
-    else:
-        raise TypeError('matrix should be row or column-major')
-    xb_ptr = __swig_ptr_from_FloatTensor(xb)
+    D = torch.empty((n, k), dtype=torch.float32, device=x.device)
+    I = torch.empty((n, k), dtype=torch.int64, device=x.device)
 
-    if D is None:
-        D = torch.empty(nq, k, device=xb.device, dtype=torch.float32)
-    else:
-        assert D.shape == (nq, k)
-        assert D.device == xb.device
-
-    if I is None:
-        I = torch.empty(nq, k, device=xb.device, dtype=torch.int64)
-    else:
-        assert I.shape == (nq, k)
-        assert I.device == xb.device
-
-    D_ptr = __swig_ptr_from_FloatTensor(D)
-    I_ptr = __swig_ptr_from_LongTensor(I)
-
-    faiss.bruteForceKnn(res, metric,
-                        xb_ptr, xb_row_major, nb,
-                        xq_ptr, xq_row_major, nq,
-                        d, k, D_ptr, I_ptr)
-
+    if is_cuda:
+        torch.cuda.synchronize()
+    xptr = __swig_ptr_from_FloatTensor(x)
+    Iptr = __swig_ptr_from_LongTensor(I)
+    Dptr = __swig_ptr_from_FloatTensor(D)
+    index.search_c(n, xptr,
+                   k, Dptr, Iptr)
+    if is_cuda:
+        torch.cuda.synchronize()
+    index.reset()
     return D, I
+
+# def search_index_pytorch(res, xb, xq, k, D=None, I=None,
+#                          metric=faiss.METRIC_L2):
+#     assert xb.device == xq.device
+#     nq, d = xq.size()
+
+#     xq_ptr = __swig_ptr_from_FloatTensor(xq)
+
+#     nb, d2 = xb.size()
+#     assert d2 == d
+#     if xb.is_contiguous():
+#         xb_row_major = True
+#     elif xb.t().is_contiguous():
+#         xb = xb.t()
+#         xb_row_major = False
+#     else:
+#         raise TypeError('matrix should be row or column-major')
+#     xb_ptr = __swig_ptr_from_FloatTensor(xb)
+
+#     if D is None:
+#         D = torch.empty(nq, k, device=xb.device, dtype=torch.float32)
+#     else:
+#         assert D.shape == (nq, k)
+#         assert D.device == xb.device
+
+#     if I is None:
+#         I = torch.empty(nq, k, device=xb.device, dtype=torch.int64)
+#     else:
+#         assert I.shape == (nq, k)
+#         assert I.device == xb.device
+
+#     D_ptr = __swig_ptr_from_FloatTensor(D)
+#     I_ptr = __swig_ptr_from_LongTensor(I)
+
+#     faiss.bruteForceKnn(res, metric,
+#                         xb_ptr, True, nb,
+#                         xq_ptr, True, nq,
+#                         d, k, D_ptr, I_ptr)
+
+#     return D, I
 
 
 class KNN(torch.autograd.Function):
@@ -137,7 +168,7 @@ class KNN(torch.autograd.Function):
         index_batch = []
         distance_batch = []
         for i in range(points.shape[0]):
-            D_var, I_var = search_index_pytorch(GPU_RES, points[i], query[i], k)
+            D_var, I_var = search_index_pytorch(points[i], query[i], k)
             GPU_RES.syncDefaultStreamCurrentDevice()
             index_batch.append(I_var)  # M, k
             distance_batch.append(D_var)  # M, k

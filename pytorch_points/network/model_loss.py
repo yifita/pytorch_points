@@ -119,7 +119,7 @@ class PointEdgeLengthLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K)
-        group_points, knn_idx, _ = operations.group_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
+        group_points, knn_idx, _ = operations.faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
         group_points= group_points[:,:,1:,:]
         dist_ref = torch.norm(group_points - points_ref.unsqueeze(2), dim=-1, p=2)
@@ -146,7 +146,7 @@ class StretchLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K), (B,N,K)
-        group_points_ref, knn_idx, _ = operations.group_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
+        group_points_ref, knn_idx, _ = operations.faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
         group_points_ref = group_points_ref[:,:,1:,:]
         dist_ref = torch.norm(group_points_ref - points_ref.unsqueeze(2), dim=-1, p=2)
@@ -280,7 +280,7 @@ class ChamferLoss(torch.nn.Module):
         if self.percentage < 1.0:
             pred_center = torch.mean(pred, dim=1, keepdim=True)
             num_point = pred.size(1)
-            pred, _, _ = operations.group_knn(int(self.percentage * num_point), pred_center, pred, unique=False, NCHW=False)
+            pred, _, _ = operations.faiss_knn(int(self.percentage * num_point), pred_center, pred, unique=False, NCHW=False)
             pred = torch.squeeze(pred, dim=1)
             # # BxN
             # dist_sqr = torch.sum((pred - pred_center)**2, dim=-1)
@@ -292,7 +292,7 @@ class ChamferLoss(torch.nn.Module):
 
             gt_center = torch.mean(gt, dim=1, keepdim=True)
             num_point = gt.size(1)
-            gt, _, _ = operations.group_knn(int(self.percentage * num_point), gt_center, gt, unique=False, NCHW=False)
+            gt, _, _ = operations.faiss_knn(int(self.percentage * num_point), gt_center, gt, unique=False, NCHW=False)
             gt = torch.squeeze(gt, dim=1)
             # # BxN
             # dist_sqr = torch.sum((label - label_center)**2, dim=-1)
