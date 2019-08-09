@@ -13,6 +13,12 @@ def check_values(tensor):
     """return true if tensor doesn't contain NaN or Inf"""
     return not (torch.any(torch.isnan(tensor)).item() or torch.any(torch.isinf(tensor)).item())
 
+def linear_loss_weight(nepoch, epoch, max, init=0):
+    """
+    linearly vary scalar during training
+    """
+    return (max - init)/nepoch *epoch + init
+
 
 def clamp_gradient(model, clip):
     for p in model.parameters():
