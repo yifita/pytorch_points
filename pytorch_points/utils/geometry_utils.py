@@ -1,7 +1,7 @@
 import numpy as np
 import random
 
-def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, numVerts) :
+def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, numVerts) :
     '''Start with the centre of the polygon at ctrX, ctrY, 
     then creates the polygon by sampling points on a circle around the centre. 
     Randon noise is added by varying the angular spacing between sequential points,
@@ -12,6 +12,7 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, numVerts) 
     aveRadius - in px, the average radius of this polygon, this roughly controls how large the polygon is, really only useful for order of magnitude.
     irregularity - [0,1] indicating how much variance there is in the angular spacing of vertices. [0,1] will map to [0, 2pi/numberOfVerts]
     spikeyness - [0,1] indicating how much variance there is in each vertex from the circle of radius aveRadius. [0,1] will map to [0, aveRadius]
+    randRot - [0, 1] indicating how much variance there is in the mean angular position of the first vertex
     numVerts - self-explanatory
 
     Returns a list of vertices, in CCW order.
@@ -38,7 +39,7 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, numVerts) 
     # now generate the points
     points = []
     # angle = random.uniform(0, 2*np.pi)
-    angle = 5*np.pi/6
+    angle = random.uniform(0, randRot)*2*np.pi
     for i in range(numVerts) :
         r_i = np.clip(np.random.normal(aveRadius, spikeyness), 0, 2*aveRadius )
         x = ctrX + r_i*np.cos(angle)
