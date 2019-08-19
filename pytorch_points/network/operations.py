@@ -1,5 +1,5 @@
-""" 
-code courtesy of 
+"""
+code courtesy of
 https://github.com/erikwijmans/Pointnet2_PyTorch
 """
 
@@ -573,7 +573,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True):
     compute normals vectors for batched points [B, C, M]
     If base is given, compute the normals of points using the neighborhood in base
     The direction of normal could flip.
-    
+
     Args:
         points: (B,C,M)
         base:   (B,C,N)
@@ -618,9 +618,17 @@ def pointUniformLaplacian(points, knn_idx=None, nn_size=3):
     batch_size, num_points, _ = points.shape
     if knn_idx is None:
         # find neighborhood, (B,N,K,3), (B,N,K)
-        group_points, knn_idx, _ = group_knn(nn_size+1, points, points, NCHW=False)
+        group_points, knn_idx, _ = faiss_knn(nn_size+1, points, points, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
         group_points = group_points[:, :, 1:, :]
+    else:
+        points_expanded = points.unsqueeze(dim=1).expand(
+            (-1, num_points, -1, -1))
+        # BxNxk -> BxNxNxC
+        index_batch_expanded = knn_idx.unsqueeze(dim=-1).expand(
+            (-1, -1, -1, points.size(-1)))
+        # BxMxkxC
+        group_points = torch.gather(points_expanded, 2, index_batch_expanded)
 
     lap = -torch.sum(group_points, dim=2)/knn_idx.shape[2] + points
     return lap, knn_idx
@@ -637,7 +645,7 @@ class UniformLaplacian(torch.nn.Module):
         self.batch, self.nf, self.face_deg = faces.shape
         self.faces = faces
         self.nv = nv
-    
+
         offset = torch.arange(0, self.batch).reshape(-1, 1, 1) * self.nv
         faces = self.faces + offset
         faces = faces.reshape(-1, self.face_deg)
@@ -657,7 +665,7 @@ class UniformLaplacian(torch.nn.Module):
     def forward(self, verts):
         assert(verts.shape[0] == self.batch)
         assert(verts.shape[1] == self.nv)
-        
+
         verts = verts.reshape(-1, verts.shape[-1])
         x = self.L.mm(verts)
         x = x / (self.Lii.unsqueeze(-1)+1e-12)
@@ -682,18 +690,18 @@ class CotLaplacian(torch.autograd.Function):
         self.F_np = faces.data.cpu().numpy()
         self.F = faces.data
         self.L = None
-    
+
     def forward(self, V):
         """
         If forward is explicitly called, V is still a Parameter or Variable
         But if called through __call__ it's a tensor.
         This assumes __call__ was used.
-        
+
         Input:
            V: B x N x 3
            F: B x F x 3
         Outputs: L x B x N x 3
-        
+
         Numpy also doesnt support sparse tensor, so stack along the batch
         """
 
@@ -784,7 +792,7 @@ def cotangent(V, F):
 def mean_value_coordinates(points, polygon):
     """
     compute wachspress MVC of points wrt a polygon
-    Args: 
+    Args:
         points: (B,D,N)
         polygon: (B,D,M)
     Returns:
@@ -838,7 +846,7 @@ def mean_value_coordinates(points, polygon):
     w = torch.where(mask_point, torch.zeros_like(w), w)
     # set vertex weight of those points to 1
     w = torch.where(mask, torch.ones_like(w), w)
-    
+
     # finally, normalize
     sumW = torch.sum(w, dim=1, keepdim=True)
     # sometimes sumw is 0?!
@@ -859,7 +867,7 @@ def cross_product_2D(tensor1, tensor2, dim=1):
 def barycentric_coordinates(points, ref_points, triangulation):
     """
     compute barycentric coordinates of N points wrt M 2D triangles/3D tetrahedrons
-    Args: 
+    Args:
         points: (B,D,N)
         ref_points: (B,D,M)
         triangulation: (B,D+1,L) L triangles (D=2) or L tetrahedra (D=3) indices
