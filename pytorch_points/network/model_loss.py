@@ -16,7 +16,7 @@ class MeshLaplacianLoss(torch.nn.Module):
         self.laplacian1 = operations.UniformLaplacian(faces, num_point)
         self.laplacian2 = operations.UniformLaplacian(faces, num_point)
         self.metric = metric
-    
+
     def forward(self, vert1, vert2):
         lap1 = self.laplacian1(vert1)
         lap2 = self.laplacian2(vert2)
@@ -37,7 +37,7 @@ class LaplacianSmoothnessLoss(object):
         self.curve_gt = torch.norm(tmp.view(-1, tmp.size(2)), p=2, dim=1).float()
         if not self.toref:
             self.curve_gt = self.curve_gt*0
-    
+
     def __call__(self, verts):
         self.Lx = self.laplacian(verts)
         # Reshape to BV x 3
@@ -53,7 +53,7 @@ class UniformLaplacianSmoothnessLoss(torch.nn.Module):
         super().__init__()
         self.laplacian = operations.UniformLaplacian(faces, num_point)
         self.metric = metric
-    
+
     def __call__(self, vert, vert_ref=None):
         lap = self.laplacian(vert)
         curve = torch.norm(lap, p=2, dim=-1)
@@ -98,7 +98,7 @@ class PointLaplacianLoss(torch.nn.Module):
         point1: (B,N,D) ref points (where connectivity is computed)
         point2: (B,N,D) pred points, uses connectivity of point1
         """
-        lap1, knn_idx = operations.pointUniformLaplacian(point1, nn_size=nn_size)
+        lap1, knn_idx = operations.pointUniformLaplacian(point1, nn_size=self.nn_size)
         lap2, _ = operations.pointUniformLaplacian(point2, knn_idx=knn_idx)
         return self.metric(lap1, lap2)
 
@@ -139,7 +139,7 @@ class StretchLoss(torch.nn.Module):
         super().__init__()
         self.nn_size = nn_size
         self.reduction = reduction
-        
+
     def forward(self, points_ref, points):
         """
         point1: (B,N,D) ref points (where connectivity is computed)
@@ -169,7 +169,7 @@ class MeshEdgeLengthLoss(torch.nn.Module):
     """
     def __init__(self, metric):
         super().__init__(self)
-        self.metric = metric 
+        self.metric = metric
 
     def forward(self, verts1, verts2, faces=None):
         """
@@ -184,7 +184,7 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         edge1 = face_verts1[:, :, [i for i in range(F)]]-face_verts1[:, :, [i for i in range(1, self.face_deg)]+[0]]
         edge2 = face_verts2[:, :, [i for i in range(F)]]-face_verts2[:, :, [i for i in range(1, self.face_deg)]+[0]]
         # distance
-        d1 = edge1 * edge1 
+        d1 = edge1 * edge1
         d2 = edge2 * edge2
         return self.metric(d1, d2)
 
@@ -302,11 +302,11 @@ class ChamferLoss(torch.nn.Module):
             # weight = weight / torch.max(weight)
             # gt2pred = gt2pred * weight
         if pred_mask is not None:
-            # (B,N) 
+            # (B,N)
             pred = torch.where(pred_mask.unsqueeze(-1), pred, torch.full(pred.shape, float("Inf"), device=pred.device, dtype=pred.dtype))
         if gt_mask is not None:
             gt = torch.where(gt_mask.unsqueeze(-1), gt, torch.full(gt.shape, float("Inf"), device=gt.device, dtype=gt.dtype))
-        
+
         pred2gt, gt2pred = nndistance(pred, gt)
 
         if self.__threshold is not None:
