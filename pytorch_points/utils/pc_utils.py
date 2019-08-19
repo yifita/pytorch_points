@@ -1,4 +1,4 @@
-""" 
+"""
 Utility functions for processing point clouds.
 """
 import os
@@ -99,14 +99,14 @@ def random_scale_point_cloud_and_gt(batch_data, batch_gt=None, scale_low=0.5, sc
 
 
 def downsample_points(pts, K):
-    # if num_pts > 8K use farthest sampling
+    # if num_pts > 2K use farthest sampling
     # else use random sampling
     if pts.shape[0] >= 2 * K:
         sampler = FarthestSampler()
-        return sampler(pts, K)
+        return sampler(pts[:,:3], K)
     else:
         return pts[np.random.choice(pts.shape[0], K,
-                                    replace=(K < pts.shape[0])), :]
+                                    replace=False), :]
 
 
 class FarthestSampler:
@@ -251,6 +251,7 @@ def save_ply(points, filename, colors=None, normals=None, binary=True):
         points (numpy array): (N,2or3)
         colors (numpy uint8 array): (N, 3or4)
     """
+    assert(points.ndim == 2)
     if points.shape[-1] == 2:
         points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
 
@@ -260,6 +261,7 @@ def save_ply(points, filename, colors=None, normals=None, binary=True):
     desc = vertex.dtype.descr
 
     if normals is not None:
+        assert(normals.ndim == 2)
         if normals.shape[-1] == 2:
             normals = np.concatenate([normals, np.zeros_like(normals)[:, :1]], axis=-1)
         vertex_normal = np.core.records.fromarrays(

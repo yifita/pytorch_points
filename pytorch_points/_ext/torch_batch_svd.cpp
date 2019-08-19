@@ -27,7 +27,7 @@ std::unique_ptr<T, Status(*)(T*)> unique_allocate(Status(allocator)(T**),  Statu
 {
     T* ptr;
     auto stat = allocator(&ptr);
-    AT_CHECK(stat == success);
+    TORCH_CHECK(stat == success);
     return {ptr, deleter};
 }
 
@@ -35,7 +35,7 @@ template <class T>
 std::unique_ptr<T, decltype(&cudaFree)> unique_cuda_ptr(size_t len) {
     T* ptr;
     auto stat = cudaMalloc(&ptr, sizeof(T) * len);
-    AT_CHECK(stat == cudaSuccess);
+    TORCH_CHECK(stat == cudaSuccess);
     return {ptr, cudaFree};
 }
 
@@ -44,17 +44,17 @@ std::unique_ptr<T, decltype(&cudaFree)> unique_cuda_ptr(size_t len) {
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
 batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=100)
 {
-    AT_CHECK(a.is_cuda(), "only cuda tensor is supported");
-    AT_CHECK(a.dtype() == at::kFloat, "only float is supported");
+    TORCH_CHECK(a.is_cuda(), "only cuda tensor is supported");
+    TORCH_CHECK(a.dtype() == at::kFloat, "only float is supported");
 
     auto handle_ptr = unique_allocate(cusolverDnCreate, cusolverDnDestroy);
     const auto A = a.contiguous().clone().transpose(1, 2).contiguous().transpose(1, 2);
     // const auto A = a;
     const auto batch_size = A.size(0);
     const auto m = A.size(1);
-    AT_CHECK(m <= 32, "matrix row should be <= 32");
+    TORCH_CHECK(m <= 32, "matrix row should be <= 32");
     const auto n = A.size(2);
-    AT_CHECK(n <= 32, "matrix col should be <= 32");
+    TORCH_CHECK(n <= 32, "matrix col should be <= 32");
     const auto lda = m;
     const auto d_A = A.data<float>();
     const auto minmn = std::min(m, n);
@@ -69,11 +69,11 @@ batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=10
 
     auto params = unique_allocate(cusolverDnCreateGesvdjInfo, cusolverDnDestroyGesvdjInfo);
     auto status = cusolverDnXgesvdjSetTolerance(params.get(), tol);
-    AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+    TORCH_CHECK(CUSOLVER_STATUS_SUCCESS == status);
     status = cusolverDnXgesvdjSetMaxSweeps(params.get(), max_sweeps);
-    AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+    TORCH_CHECK(CUSOLVER_STATUS_SUCCESS == status);
     status = cusolverDnXgesvdjSetSortEig(params.get(), is_sort);
-    AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+    TORCH_CHECK(CUSOLVER_STATUS_SUCCESS == status);
 
     auto jobz = CUSOLVER_EIG_MODE_VECTOR; // compute eigenvalues and eigenvectors
     int lwork;
@@ -92,7 +92,7 @@ batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=10
         &lwork,
         params.get(),
         batch_size);
-    AT_CHECK(CUSOLVER_STATUS_SUCCESS == status_buffer);
+    TORCH_CHECK(CUSOLVER_STATUS_SUCCESS == status_buffer);
     auto work_ptr = unique_cuda_ptr<float>(lwork);
     auto info_ptr = unique_cuda_ptr<int>(batch_size);
     status = cusolverDnSgesvdjBatched(
@@ -113,11 +113,11 @@ batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=10
         params.get(),
         batch_size
         );
-    AT_CHECK(CUSOLVER_STATUS_SUCCESS == status);
+    TORCH_CHECK(CUSOLVER_STATUS_SUCCESS == status);
 
     std::vector<int> hinfo(batch_size);
     auto status_memcpy = cudaMemcpy(hinfo.data(), info_ptr.get(), sizeof(int) * batch_size, cudaMemcpyDeviceToHost);
-    AT_CHECK(cudaSuccess == status_memcpy);
+    TORCH_CHECK(cudaSuccess == status_memcpy);
 
     for(int i = 0 ; i < batch_size; ++i)
     {
@@ -128,7 +128,7 @@ batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=10
         else if ( 0 > hinfo[i] )
         {
             printf("Error: %d-th parameter is wrong \n", -hinfo[i]);
-            AT_CHECK(false);
+            TORCH_CHECK(false);
         }
         else
         {
@@ -154,7 +154,7 @@ batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=10
 // This makes no assumption on the signs of sigma.
 at::Tensor batch_svd_backward(const std::vector<at::Tensor> &grads, const at::Tensor& self,
           bool some, bool compute_uv, const at::Tensor& raw_u, const at::Tensor& sigma, const at::Tensor& raw_v) {
-  AT_CHECK(compute_uv,
+  TORCH_CHECK(compute_uv,
            "svd_backward: Setting compute_uv to false in torch.svd doesn't compute singular matrices, ",
            "and hence we cannot compute backward. Please use torch.svd(compute_uv=True)");
 
