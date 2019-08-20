@@ -103,7 +103,7 @@ def downsample_points(pts, K):
     # else use random sampling
     if pts.shape[0] >= 2 * K:
         sampler = FarthestSampler()
-        return sampler(pts[:,:3], K)
+        return sampler(pts, K)
     else:
         return pts[np.random.choice(pts.shape[0], K,
                                     replace=False), :]

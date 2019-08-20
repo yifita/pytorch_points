@@ -242,10 +242,11 @@ class SimpleMeshRepulsionLoss(torch.nn.Module):
     """
     Penalize very short mesh edges
     """
-    def __init__(self, threshold, faces=None):
-        super().__init__(self)
+    def __init__(self, threshold, faces=None, reduction="mean"):
+        super().__init__()
         self.faces = faces
         self.threshold2 = threshold*threshold
+        self.reduction = reduction
 
     def forward(self, verts1, faces=None):
         """
@@ -256,6 +257,8 @@ class SimpleMeshRepulsionLoss(torch.nn.Module):
         assert((self.faces is not None) or (faces is not None))
         faces = faces or self.faces
         F = faces.shape[1]
+        if faces.shape[0] != verts1.shape[0] and faces.shape[0] == 1:
+            faces = faces.expand(verts1.shape[0], -1, -1)
         # (B, F, N, 3)
         face_verts1 = torch.gather(verts1.unsqueeze(1).expand(-1, F, -1, -1), 2, faces.unsqueeze(-1).expand(-1, -1, -1, verts1.shape[-1]))
         edge1 = face_verts1[:, :, [i for i in range(F)]]-face_verts1[:, :, [i for i in range(1, self.face_deg)]+[0]]
