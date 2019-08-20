@@ -27,7 +27,7 @@ def clamp_gradient(model, clip):
 def clamp_gradient_norm(model, max_norm, norm_type=2):
     for p in model.parameters():
         torch.nn.utils.clip_grad_norm_(p, max_norm, norm_type=2)
-        
+
 
 def weights_init(m):
     """
@@ -106,3 +106,9 @@ def tolerating_collate(batch):
     "Puts each data field into a tensor with outer dimension batch size"
     batch = [x for x in filter(lambda x: x is not None, batch)]
     return torch.utils.data.dataloader.default_collate(batch)
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
