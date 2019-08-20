@@ -105,7 +105,7 @@ class PointLaplacianLoss(torch.nn.Module):
 
 class PointEdgeLengthLoss(torch.nn.Module):
     """
-    compare uniform laplacian of two point clouds assuming known correspondence
+    Penalize edge length change
     metric: an instance of a module e.g. L1Loss
     """
     def __init__(self, nn_size, metric):
@@ -189,13 +189,15 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         return self.metric(d1, d2)
 
 class NormalLoss(torch.nn.Module):
-    def __init__(self, nn_size=10):
+    def __init__(self, metric, nn_size=10):
         self.nn_size = nn_size
+        self.metric = metric
 
     def forward(self, pred, gt):
         pred_normals = operations.batch_normals(pred, nn_size=10, NCHW=True)
         gt_normals = operations.batch_normals(gt, nn_size=10, NCHW=True)
         # compare the normal with the closest point
+        return self.metric(pred_normals, gt_normals)
 
 
 class NmDistanceFunction(torch.autograd.Function):
@@ -235,6 +237,75 @@ class NmDistanceFunction(torch.autograd.Function):
 
 
 nndistance = NmDistanceFunction.apply
+
+class SimpleMeshRepulsionLoss(torch.nn.Module):
+    """
+    Penalize very short mesh edges
+    """
+    def __init__(self, threshold, faces=None):
+        super().__init__(self)
+        self.faces = faces
+        self.threshold2 = threshold*threshold
+
+    def forward(self, verts1, faces=None):
+        """
+        verts1: (B, N, 3)
+        verts2: (B, N, 3)
+        faces:  (B, F, L)
+        """
+        assert((self.faces is not None) or (faces is not None))
+        faces = faces or self.faces
+        F = faces.shape[1]
+        # (B, F, N, 3)
+        face_verts1 = torch.gather(verts1.unsqueeze(1).expand(-1, F, -1, -1), 2, faces.unsqueeze(-1).expand(-1, -1, -1, verts1.shape[-1]))
+        edge1 = face_verts1[:, :, [i for i in range(F)]]-face_verts1[:, :, [i for i in range(1, self.face_deg)]+[0]]
+        # distance
+        d1 = edge1 * edge1
+        loss = 1/(d1+1e-6)
+        loss = torch.where(d1 < self.threshold2, loss, torch.zeros_like(loss))
+        if self.reduction == "mean":
+            return torch.mean(loss)
+        elif self.reduction == "sum":
+            return torch.sum(loss)
+        elif self.reduction is "none":
+            return loss
+        else:
+            raise NotImplementedError
+
+class SimplePointRepulsionLoss(torch.nn.Module):
+    """
+    Penalize points within a radius
+    params:
+        points:  (B,N,C)
+        nn_size: neighborhood size
+    """
+    def __init__(self, nn_size, radius, reduction="mean"):
+        super().__init__()
+        self.nn_size = nn_size
+        self.reduction = reduction
+        self.radius2 = radius*radius
+
+    def forward(self, points, knn_idx=None):
+        batchSize, PN, _ = points.shape
+        if knn_idx is None:
+            knn_points, knn_idx, distance2 = operations.faiss_knn(self.nn_size+1, points, points, NCHW=False)
+            knn_points = knn_points[:, :, 1:, :].contiguous().detach()
+            knn_idx = knn_idx[:, :, 1:].contiguous()
+        else:
+            knn_points = torch.gather(points.unsqueeze(1).expand(-1, PN, -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
+
+        knn_v = knn_points - points.unsqueeze(dim=2)
+        distance2 = torch.sum(knn_v * knn_v, dim=-1)
+        loss = 1/torch.sqrt(distance2+1e-4)
+        loss = torch.where(distance2 < self.radius2, loss, torch.zeros_like(loss))
+        if self.reduction == "mean":
+            return torch.mean(loss)
+        elif self.reduction == "sum":
+            return torch.sum(loss)
+        elif self.reduction is "none":
+            return loss
+        else:
+            raise NotImplementedError
 
 
 class ChamferLoss(torch.nn.Module):
