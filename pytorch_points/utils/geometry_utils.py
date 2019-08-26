@@ -1,9 +1,25 @@
 import numpy as np
 import random
+import openmesh as om
+
+def read_trimesh(filename):
+    """
+    load vertices and faces of a mesh file
+    return:
+        V (N,3) floats
+        F (F,3) int64
+    """
+    mesh = om.read_trimesh(filename)
+    V = mesh.points()
+    face_lists = []
+    for f in mesh.face_vertex_indices():
+        face_lists.append(f)
+    F = np.stack(face_lists, axis=0)
+    return V, F
 
 def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, numVerts) :
-    '''Start with the centre of the polygon at ctrX, ctrY, 
-    then creates the polygon by sampling points on a circle around the centre. 
+    '''Start with the centre of the polygon at ctrX, ctrY,
+    then creates the polygon by sampling points on a circle around the centre.
     Randon noise is added by varying the angular spacing between sequential points,
     and by varying the radial distance of each point from the centre.
 
