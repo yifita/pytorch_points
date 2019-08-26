@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import openmesh as om
+import os
 
 def read_trimesh(filename):
     """
@@ -16,6 +17,26 @@ def read_trimesh(filename):
         face_lists.append(f)
     F = np.stack(face_lists, axis=0)
     return V, F
+
+def write_trimesh(filename, V, F):
+    """
+    write a mesh with (N,3) vertices and (F,3) faces to file
+    """
+    assert(V.ndim==2)
+    assert(F.ndim==2)
+    assert(F.shape[-1]==3)
+
+    mesh = om.TriMesh()
+
+    for v in range(V.shape[0]):
+        mesh.add_vertex(V[v])
+
+    for f in range(F.shape[0]):
+        vh_list = [mesh.vertex_handle(vIdx) for vIdx in F[f]]
+        fh0 = mesh.add_face(vh_list)
+
+    om.write_mesh(filename, mesh)
+
 
 def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, numVerts) :
     '''Start with the centre of the polygon at ctrX, ctrY,

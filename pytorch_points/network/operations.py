@@ -10,6 +10,7 @@ from threading import Thread
 
 from .._ext import sampling
 from .._ext import linalg
+from ..utils.pytorch_utils import check_values
 from torch_scatter import scatter_add
 
 if torch.cuda.is_available():
@@ -111,47 +112,6 @@ def search_index_pytorch(database, x, k):
         torch.cuda.synchronize()
     index.reset()
     return D, I
-
-# def search_index_pytorch(res, xb, xq, k, D=None, I=None,
-#                          metric=faiss.METRIC_L2):
-#     assert xb.device == xq.device
-#     nq, d = xq.size()
-
-#     xq_ptr = __swig_ptr_from_FloatTensor(xq)
-
-#     nb, d2 = xb.size()
-#     assert d2 == d
-#     if xb.is_contiguous():
-#         xb_row_major = True
-#     elif xb.t().is_contiguous():
-#         xb = xb.t()
-#         xb_row_major = False
-#     else:
-#         raise TypeError('matrix should be row or column-major')
-#     xb_ptr = __swig_ptr_from_FloatTensor(xb)
-
-#     if D is None:
-#         D = torch.empty(nq, k, device=xb.device, dtype=torch.float32)
-#     else:
-#         assert D.shape == (nq, k)
-#         assert D.device == xb.device
-
-#     if I is None:
-#         I = torch.empty(nq, k, device=xb.device, dtype=torch.int64)
-#     else:
-#         assert I.shape == (nq, k)
-#         assert I.device == xb.device
-
-#     D_ptr = __swig_ptr_from_FloatTensor(D)
-#     I_ptr = __swig_ptr_from_LongTensor(I)
-
-#     faiss.bruteForceKnn(res, metric,
-#                         xb_ptr, True, nb,
-#                         xq_ptr, True, nq,
-#                         d, k, D_ptr, I_ptr)
-
-#     return D, I
-
 
 class KNN(torch.autograd.Function):
     @staticmethod
@@ -810,33 +770,41 @@ def mean_value_coordinates_3D(query, vertices, faces):
     dj = torch.norm(uj, dim=-1, p=2, keepdim=True)
     # TODO: if lu < epsilon, wj to delta_ij (B,P,N,3)
     uj = normalize(uj, dim=-1)
+    assert(check_values(uj))
     # gather triangle B,P,F,3,3
     triangle_points = torch.gather(uj.unsqueeze(2).expand(-1,-1,F,-1,-1),
                                    3,
                                    faces.unsqueeze(1).unsqueeze(-1).expand(-1,P,-1,-1,3))
     # li = \|u_{i+1}-u_{i-1}\| (B,P,F,3)
     li = torch.norm(triangle_points[:,:,:,[1, 2, 0],:] - triangle_points[:, :, :,[2, 0, 1],:], dim=-1, p=2)
+    li = torch.where(li>2, li-(li.detach()-2), li)
+    li = torch.where(li<-2, li-(li.detach()+2), li)
+    assert(check_values(li))
     # θi =  2arcsin[li/2] (B,P,F,3)
     theta_i = 2*torch.asin(li/2)
+    assert(check_values(theta_i))
     # B,P,F,1
     h = torch.sum(theta_i, dim=-1, keepdim=True)/2
     # TODO if π −h < ε, x lies on t, use 2D barycentric coordinates
     # wi← sin[θi]d{i−1}d{i+1}
     # (B,P,F,3) ci ← (2sin[h]sin[h−θi])/(sin[θ_{i+1}]sin[θ_{i−1}])−1
     ci = 2*torch.sin(h)*torch.sin(h-theta_i)/(torch.sin(theta_i[:,:,:,[1, 2, 0]])*torch.sin(theta_i[:,:,:,[2, 0, 1]]))-1
+    assert(check_values(ci))
     # NOTE: because of floating point ci can be slightly larger than 1, causing problem with sqrt(1-ci^2)
     ci = torch.where(ci>1, ci-(ci.detach()-1), ci)
     ci = torch.where(ci<-1, ci-(ci.detach()+1), ci)
     # si← sign[det[u1,u2,u3]]sqrt(1-ci^2)
     # (B,P,F)*(B,P,F,3)
-    si = torch.sign(torch.det(triangle_points)).unsqueeze(-1)*torch.sqrt(1-ci**2)
+    si = torch.sign(torch.det(triangle_points)).unsqueeze(-1)*torch.sqrt(1-ci**2+1e-15)  # sqrt gradient nan for 0
+    assert(check_values(si))
     # TODO if ∃i,|si| ≤ ε, set wi to 0. coplaner with T but outside
     # (B,P,F,3)
     di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
                       faces.unsqueeze(1).expand(-1,P,-1,-1))
+    assert(check_values(di))
     # wi← (θi −c[i+1]θ[i−1] −c[i−1]θ[i+1])/(disin[θi+1]s[i−1])
     # B,P,F,3
-    wi = (theta_i-ci[:,:,:,[1,2,0]]*theta_i[:,:,:,[2,0,1]]-ci[:,:,:,[2,0,1]]*theta_i[:,:,:,[1,2,0]])/(di*torch.sin(theta_i[:,:,:,[1,2,0]])*si[:,:,:,[2,0,1]]+1e-10)
+    wi = (theta_i-ci[:,:,:,[1,2,0]]*theta_i[:,:,:,[2,0,1]]-ci[:,:,:,[2,0,1]]*theta_i[:,:,:,[1,2,0]])/(di*torch.sin(theta_i[:,:,:,[1,2,0]])*si[:,:,:,[2,0,1]])
 
     # ignore coplaner outside triangle
     wi = torch.where(torch.any(torch.abs(si) <= 1e-8, keepdim=True, dim=-1), torch.zeros_like(wi), wi)
@@ -862,6 +830,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
 
     wj = wj / sumWj
     return wj
+
 
 def mean_value_coordinates(points, polygon):
     """
