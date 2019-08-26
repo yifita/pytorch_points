@@ -10,6 +10,7 @@ from threading import Thread
 
 from .._ext import sampling
 from .._ext import linalg
+from torch_scatter import scatter_add
 
 if torch.cuda.is_available():
     from .faiss_setup import GPU_RES
@@ -789,9 +790,83 @@ def cotangent(V, F):
     return C
 
 
+def mean_value_coordinates_3D(query, vertices, faces):
+    """
+    Tao Ju et.al. MVC for 3D triangle meshes
+    params:
+        query    (B,P,3)
+        vertices (B,N,3)
+        faces    (B,F,3)
+    return:
+        wj       (B,P,N)
+    """
+    PI = 3.1415927
+    B, F, _ = faces.shape
+    _, P, _ = query.shape
+    _, N, _ = vertices.shape
+    # u_i = p_i - x (B,P,N,3)
+    uj = vertices.unsqueeze(1) - query.unsqueeze(2)
+    # \|u_i\| (B,P,N,1)
+    dj = torch.norm(uj, dim=-1, p=2, keepdim=True)
+    # TODO: if lu < epsilon, wj to delta_ij (B,P,N,3)
+    uj = normalize(uj, dim=-1)
+    # gather triangle B,P,F,3,3
+    triangle_points = torch.gather(uj.unsqueeze(2).expand(-1,-1,F,-1,-1),
+                                   3,
+                                   faces.unsqueeze(1).unsqueeze(-1).expand(-1,P,-1,-1,3))
+    # li = \|u_{i+1}-u_{i-1}\| (B,P,F,3)
+    li = torch.norm(triangle_points[:,:,:,[1, 2, 0],:] - triangle_points[:, :, :,[2, 0, 1],:], dim=-1, p=2)
+    # θi =  2arcsin[li/2] (B,P,F,3)
+    theta_i = 2*torch.asin(li/2)
+    # B,P,F,1
+    h = torch.sum(theta_i, dim=-1, keepdim=True)/2
+    # TODO if π −h < ε, x lies on t, use 2D barycentric coordinates
+    # wi← sin[θi]d{i−1}d{i+1}
+    # (B,P,F,3) ci ← (2sin[h]sin[h−θi])/(sin[θ_{i+1}]sin[θ_{i−1}])−1
+    ci = 2*torch.sin(h)*torch.sin(h-theta_i)/(torch.sin(theta_i[:,:,:,[1, 2, 0]])*torch.sin(theta_i[:,:,:,[2, 0, 1]]))-1
+    # NOTE: because of floating point ci can be slightly larger than 1, causing problem with sqrt(1-ci^2)
+    ci = torch.where(ci>1, ci-(ci.detach()-1), ci)
+    ci = torch.where(ci<-1, ci-(ci.detach()+1), ci)
+    # si← sign[det[u1,u2,u3]]sqrt(1-ci^2)
+    # (B,P,F)*(B,P,F,3)
+    si = torch.sign(torch.det(triangle_points)).unsqueeze(-1)*torch.sqrt(1-ci**2)
+    # TODO if ∃i,|si| ≤ ε, set wi to 0. coplaner with T but outside
+    # (B,P,F,3)
+    di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
+                      faces.unsqueeze(1).expand(-1,P,-1,-1))
+    # wi← (θi −c[i+1]θ[i−1] −c[i−1]θ[i+1])/(disin[θi+1]s[i−1])
+    # B,P,F,3
+    wi = (theta_i-ci[:,:,:,[1,2,0]]*theta_i[:,:,:,[2,0,1]]-ci[:,:,:,[2,0,1]]*theta_i[:,:,:,[1,2,0]])/(di*torch.sin(theta_i[:,:,:,[1,2,0]])*si[:,:,:,[2,0,1]]+1e-10)
+
+    # ignore coplaner outside triangle
+    wi = torch.where(torch.any(torch.abs(si) <= 1e-8, keepdim=True, dim=-1), torch.zeros_like(wi), wi)
+
+    # inside triangle
+    inside_triangle = (PI-h).squeeze(-1)<1e-3
+    # set all F for this P to zero
+    wi = torch.where(torch.any(inside_triangle, dim=-1, keepdim=True).unsqueeze(-1), torch.zeros_like(wi), wi)
+    wi = torch.where(inside_triangle.unsqueeze(-1), torch.sin(theta_i)*di[:,:,:,[2,0,1]]*di[:,:,:,[1,2,0]], wi)
+
+    # per face -> vertex (B,P,F*3) -> (B,P,N)
+    wj = scatter_add(wi.view(B,P,-1), faces.unsqueeze(1).expand(-1,P,-1,-1).view(B,P,-1),2)
+
+    # close to vertex (B,P,N)
+    close_to_point = dj.squeeze(-1) < 1e-8
+    # set all F for this P to zero
+    wj = torch.where(torch.any(close_to_point, dim=-1, keepdim=True), torch.zeros_like(wj), wj)
+    wj = torch.where(close_to_point, torch.ones_like(wj), wj)
+
+    # (B,P,1)
+    sumWj = torch.sum(wj, dim=-1, keepdim=True)
+    sumWj = torch.where(sumWj==0, torch.ones_like(sumWj), sumWj)
+
+    wj = wj / sumWj
+    return wj
+
 def mean_value_coordinates(points, polygon):
     """
     compute wachspress MVC of points wrt a polygon
+    https://www.mn.uio.no/math/english/people/aca/michaelf/papers/barycentric.pdf
     Args:
         points: (B,D,N)
         polygon: (B,D,M)
@@ -864,73 +939,6 @@ def cross_product_2D(tensor1, tensor2, dim=1):
     output = torch.narrow(tensor1, dim, 0, 1) * torch.narrow(tensor2, dim, 1, 1) - torch.narrow(tensor1, dim, 1, 1) * torch.narrow(tensor2, dim, 0, 1)
     return output.squeeze(dim)
 
-def barycentric_coordinates(points, ref_points, triangulation):
-    """
-    compute barycentric coordinates of N points wrt M 2D triangles/3D tetrahedrons
-    Args:
-        points: (B,D,N)
-        ref_points: (B,D,M)
-        triangulation: (B,D+1,L) L triangles (D=2) or L tetrahedra (D=3) indices
-    Returns:
-        epsilon: (B,N,L,D+1) weights for all triangles
-        simplexMask: (B,N,L) mask the enclosing triangle
-        pointMask: (B,N) mask the valid points
-    """
-    L = triangulation.shape[-1]
-    D = ref_points.shape[1]
-    N = points.shape[-1]
-    M = ref_points.shape[-1]
-    # find enclosing triangle
-    ref_points = ref_points.transpose(2, 1).contiguous()
-    triangulation = triangulation.transpose(2, 1).contiguous()
-    # (B,L,D+1,D)
-    simplexes = torch.gather(ref_points.unsqueeze(1).expand(-1, L, -1, -1), 2, triangulation.unsqueeze(-1).expand(-1, -1, -1, ref_points.shape[-1]))
-    # (B,L,D,D+1)
-    simplexes = simplexes.transpose(2,3)
-    # (B,N,1,D) - (B,1,L,D) = (B,N,L,D)
-    B = points.transpose(1,2).unsqueeze(2) - simplexes[:, :, :, -1].unsqueeze(1)
-    # (B,L,D,D+1) - (B,L,D,1) = (B,L,D,D+1)
-    T = (simplexes - simplexes[:,:,:,-1:])[:,:,:,:D]
-    # (B,N,L,D,D)epsilon = (B,N,L,D,1), epsilon (B,N,L,D,1)
-    epsilon, _ = torch.solve(B.unsqueeze(-1), T.unsqueeze(1).expand(-1, N, -1, -1, -1))
-    epsilon_last = 1 - torch.sum(epsilon, dim=-2, keepdim=True)
-    # (B,N,L,D+1)
-    epsilon = torch.cat([epsilon, epsilon_last], dim=-2).squeeze(-1)
-    # (B,N,L) enclosing triangle has positive coordinates
-    simplexMask = torch.all((epsilon < 1) & (epsilon > 0), dim=-1)
-    # cannot be enclosed in multiple simplexes
-    assert(torch.all(torch.sum(simplexMask, dim=-1) <= 1)), "detected points enclosed in multiple triangles"
-    # (B,N,L,D+1)
-    epsilon = epsilon * simplexMask.unsqueeze(-1).to(dtype=epsilon.dtype)
-    # (B,N)
-    pointMask = torch.eq(torch.sum(simplexMask, dim=-1), 1)
-    return epsilon, simplexMask, pointMask
-
-def barycentric_map(points, epsilon, cage, triangulation, simplexMask):
-    """
-    Args:
-        points: (B,D,N)
-        epsilon: (B,N,L,D+1) weights
-        cage: (B,D,M) cage points
-        triangulation: (B,D+1,L) L triangles (D=2) or L tetrahedra (D=3) indices
-        simplexMask: (B,N,L) mask for enclosing simplex
-    Return:
-        mapped: (B,D,N) mapped points, invalid points is mapped to zero
-        epsilon_filtered: (B,N,D+1)
-    """
-    L = triangulation.shape[-1]
-    N = points.shape[-1]
-    cage_trans = cage.transpose(2, 1).contiguous()
-    triangulation = triangulation.transpose(2,1).contiguous()
-    # (B,L,D+1,D)
-    simplexes = torch.gather(cage_trans.unsqueeze(1).expand(-1, L, -1, -1), 2, triangulation.unsqueeze(-1).expand(-1, -1, -1, cage_trans.shape[-1]))
-    epsilon_filtered = simplexMask.to(dtype=epsilon.dtype).unsqueeze(-1)*epsilon
-    # (B,N,L,D+1,D) * (B,N,L,1,1) * (B,N,L,D+1,1) = (B,N,L,D+1,D)
-    mapped = simplexes.unsqueeze(1).expand(-1,N,-1,-1,-1)*epsilon_filtered.unsqueeze(-1)
-    # (B,N,D)
-    mapped = torch.sum(torch.sum(mapped, dim=2),dim=2)
-    epsilon_filtered = torch.sum(epsilon_filtered, dim=2)
-    return mapped.transpose(1,2), epsilon_filtered
 
 
 if __name__ == '__main__':
