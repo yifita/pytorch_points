@@ -2,6 +2,7 @@ import numpy as np
 import random
 import openmesh as om
 import os
+from matplotlib import cm
 
 def read_trimesh(filename):
     """
@@ -18,7 +19,7 @@ def read_trimesh(filename):
     F = np.stack(face_lists, axis=0)
     return V, F
 
-def write_trimesh(filename, V, F):
+def write_trimesh(filename, V, F, v_colors=None, cmap_name="Set1"):
     """
     write a mesh with (N,3) vertices and (F,3) faces to file
     """
@@ -27,16 +28,27 @@ def write_trimesh(filename, V, F):
     assert(F.shape[-1]==3)
 
     mesh = om.TriMesh()
+    if v_colors is not None:
+        assert(v_colors.shape[0]==V.shape[0])
+        if v_colors.size == V.shape[0]:
+            cmap = cm.get_cmap(cmap_name)
+            minV, maxV = v_colors.min(), v_colors.max()
+            v_colors = (v_colors-minV)/maxV
+            v_colors = [cmap(color) for color in v_colors]
+        mesh.request_vertex_colors()
+
 
     for v in range(V.shape[0]):
-        mesh.add_vertex(V[v])
+        vh = mesh.add_vertex(V[v])
+        if mesh.has_vertex_colors() and v_colors is not None:
+            mesh.set_color(vh, v_colors[v])
 
     for f in range(F.shape[0]):
         vh_list = [mesh.vertex_handle(vIdx) for vIdx in F[f]]
         fh0 = mesh.add_face(vh_list)
 
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    om.write_mesh(filename, mesh)
+    om.write_mesh(filename, mesh, vertex_color=mesh.has_vertex_colors())
 
 
 def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, numVerts) :

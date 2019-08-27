@@ -776,9 +776,9 @@ def mean_value_coordinates_3D(query, vertices, faces):
                                    faces.unsqueeze(1).unsqueeze(-1).expand(-1,P,-1,-1,3))
     # li = \|u_{i+1}-u_{i-1}\| (B,P,F,3)
     li = torch.norm(triangle_points[:,:,:,[1, 2, 0],:] - triangle_points[:, :, :,[2, 0, 1],:], dim=-1, p=2)
-    eps = 1e-3
-    li = torch.where(li>2, li-(li.detach()-(2-eps)), li)
-    li = torch.where(li<-2, li-(li.detach()+(2-eps)), li)
+    eps = 2e-5
+    li = torch.where(li>=2, li-(li.detach()-(2-eps)), li)
+    li = torch.where(li<=-2, li-(li.detach()+(2-eps)), li)
     # asin(x) is inf at +/-1
     # θi =  2arcsin[li/2] (B,P,F,3)
     theta_i = 2*torch.asin(li/2)
@@ -792,7 +792,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
 
     # NOTE: because of floating point ci can be slightly larger than 1, causing problem with sqrt(1-ci^2)
     # NOTE: sqrt(x)' is nan for x=0, hence use eps
-    eps = 1e-3
+    eps = 1e-5
     ci = torch.where(ci>=1, ci-(ci.detach()-(1-eps)), ci)
     ci = torch.where(ci<=-1, ci-(ci.detach()+(1-eps)), ci)
     # si← sign[det[u1,u2,u3]]sqrt(1-ci^2)
