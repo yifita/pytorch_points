@@ -35,6 +35,7 @@ def write_trimesh(filename, V, F):
         vh_list = [mesh.vertex_handle(vIdx) for vIdx in F[f]]
         fh0 = mesh.add_face(vh_list)
 
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     om.write_mesh(filename, mesh)
 
 

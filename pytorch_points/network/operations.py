@@ -10,7 +10,7 @@ from threading import Thread
 
 from .._ext import sampling
 from .._ext import linalg
-from ..utils.pytorch_utils import check_values
+from ..utils.pytorch_utils import check_values, save_grad, saved_variables
 from torch_scatter import scatter_add
 
 if torch.cuda.is_available():
@@ -776,9 +776,10 @@ def mean_value_coordinates_3D(query, vertices, faces):
                                    faces.unsqueeze(1).unsqueeze(-1).expand(-1,P,-1,-1,3))
     # li = \|u_{i+1}-u_{i-1}\| (B,P,F,3)
     li = torch.norm(triangle_points[:,:,:,[1, 2, 0],:] - triangle_points[:, :, :,[2, 0, 1],:], dim=-1, p=2)
-    li = torch.where(li>2, li-(li.detach()-2), li)
-    li = torch.where(li<-2, li-(li.detach()+2), li)
-
+    eps = 1e-3
+    li = torch.where(li>2, li-(li.detach()-(2-eps)), li)
+    li = torch.where(li<-2, li-(li.detach()+(2-eps)), li)
+    # asin(x) is inf at +/-1
     # θi =  2arcsin[li/2] (B,P,F,3)
     theta_i = 2*torch.asin(li/2)
     assert(check_values(theta_i))
@@ -790,28 +791,30 @@ def mean_value_coordinates_3D(query, vertices, faces):
     ci = 2*torch.sin(h)*torch.sin(h-theta_i)/(torch.sin(theta_i[:,:,:,[1, 2, 0]])*torch.sin(theta_i[:,:,:,[2, 0, 1]]))-1
 
     # NOTE: because of floating point ci can be slightly larger than 1, causing problem with sqrt(1-ci^2)
-    ci = torch.where(ci>1, ci-(ci.detach()-1), ci)
-    ci = torch.where(ci<-1, ci-(ci.detach()+1), ci)
+    # NOTE: sqrt(x)' is nan for x=0, hence use eps
+    eps = 1e-3
+    ci = torch.where(ci>=1, ci-(ci.detach()-(1-eps)), ci)
+    ci = torch.where(ci<=-1, ci-(ci.detach()+(1-eps)), ci)
     # si← sign[det[u1,u2,u3]]sqrt(1-ci^2)
     # (B,P,F)*(B,P,F,3)
-    si = torch.sign(torch.det(triangle_points)).unsqueeze(-1)*torch.sqrt(1-ci**2+1e-15)  # sqrt gradient nan for 0
+    si = torch.sign(torch.det(triangle_points)).unsqueeze(-1)*torch.sqrt(1-ci**2)  # sqrt gradient nan for 0
     assert(check_values(si))
     # TODO if ∃i,|si| ≤ ε, set wi to 0. coplaner with T but outside
     # (B,P,F,3)
     di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
                       faces.unsqueeze(1).expand(-1,P,-1,-1))
     assert(check_values(di))
-    # if si.requires_grad:
-    #     saved_variables["di"] = di.detach()
-    #     saved_variables["si"] = si.detach()
-    #     saved_variables["ci"] = ci.detach()
-    #     saved_variables["thetai"] = theta_i.detach()
-    #     saved_variables["li"] = li.detach()
-    #     li.register_hook(save_grad("dli"))
-    #     theta_i.register_hook(save_grad("dtheta"))
-    #     ci.register_hook(save_grad("dci"))
-    #     si.register_hook(save_grad("dsi"))
-    #     di.register_hook(save_grad("ddi"))
+    if si.requires_grad:
+        saved_variables["di"] = di.detach()
+        saved_variables["si"] = si.detach()
+        saved_variables["ci"] = ci.detach()
+        saved_variables["thetai"] = theta_i.detach()
+        saved_variables["li"] = li.detach()
+        li.register_hook(save_grad("dli"))
+        theta_i.register_hook(save_grad("dtheta"))
+        ci.register_hook(save_grad("dci"))
+        si.register_hook(save_grad("dsi"))
+        di.register_hook(save_grad("ddi"))
     # wi← (θi −c[i+1]θ[i−1] −c[i−1]θ[i+1])/(disin[θi+1]s[i−1])
     # B,P,F,3
     wi = (theta_i-ci[:,:,:,[1,2,0]]*theta_i[:,:,:,[2,0,1]]-ci[:,:,:,[2,0,1]]*theta_i[:,:,:,[1,2,0]])/(di*torch.sin(theta_i[:,:,:,[1,2,0]])*si[:,:,:,[2,0,1]])
@@ -839,10 +842,10 @@ def mean_value_coordinates_3D(query, vertices, faces):
     sumWj = torch.where(sumWj==0, torch.ones_like(sumWj), sumWj)
 
     wj = wj / sumWj
-    # if wj.requires_grad:
-    #     saved_variables["dwi"] = wi.detach()
-    #     wi.register_hook(save_grad("dwi"))
-    #     wj.register_hook(save_grad("dwj"))
+    if wj.requires_grad:
+        saved_variables["dwi"] = wi.detach()
+        wi.register_hook(save_grad("dwi"))
+        wj.register_hook(save_grad("dwj"))
     return wj
 
 
