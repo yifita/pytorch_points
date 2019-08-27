@@ -770,7 +770,6 @@ def mean_value_coordinates_3D(query, vertices, faces):
     dj = torch.norm(uj, dim=-1, p=2, keepdim=True)
     # TODO: if lu < epsilon, wj to delta_ij (B,P,N,3)
     uj = normalize(uj, dim=-1)
-    assert(check_values(uj))
     # gather triangle B,P,F,3,3
     triangle_points = torch.gather(uj.unsqueeze(2).expand(-1,-1,F,-1,-1),
                                    3,
@@ -779,7 +778,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
     li = torch.norm(triangle_points[:,:,:,[1, 2, 0],:] - triangle_points[:, :, :,[2, 0, 1],:], dim=-1, p=2)
     li = torch.where(li>2, li-(li.detach()-2), li)
     li = torch.where(li<-2, li-(li.detach()+2), li)
-    assert(check_values(li))
+
     # θi =  2arcsin[li/2] (B,P,F,3)
     theta_i = 2*torch.asin(li/2)
     assert(check_values(theta_i))
@@ -789,7 +788,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
     # wi← sin[θi]d{i−1}d{i+1}
     # (B,P,F,3) ci ← (2sin[h]sin[h−θi])/(sin[θ_{i+1}]sin[θ_{i−1}])−1
     ci = 2*torch.sin(h)*torch.sin(h-theta_i)/(torch.sin(theta_i[:,:,:,[1, 2, 0]])*torch.sin(theta_i[:,:,:,[2, 0, 1]]))-1
-    assert(check_values(ci))
+
     # NOTE: because of floating point ci can be slightly larger than 1, causing problem with sqrt(1-ci^2)
     ci = torch.where(ci>1, ci-(ci.detach()-1), ci)
     ci = torch.where(ci<-1, ci-(ci.detach()+1), ci)
@@ -802,12 +801,23 @@ def mean_value_coordinates_3D(query, vertices, faces):
     di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
                       faces.unsqueeze(1).expand(-1,P,-1,-1))
     assert(check_values(di))
+    # if si.requires_grad:
+    #     saved_variables["di"] = di.detach()
+    #     saved_variables["si"] = si.detach()
+    #     saved_variables["ci"] = ci.detach()
+    #     saved_variables["thetai"] = theta_i.detach()
+    #     saved_variables["li"] = li.detach()
+    #     li.register_hook(save_grad("dli"))
+    #     theta_i.register_hook(save_grad("dtheta"))
+    #     ci.register_hook(save_grad("dci"))
+    #     si.register_hook(save_grad("dsi"))
+    #     di.register_hook(save_grad("ddi"))
     # wi← (θi −c[i+1]θ[i−1] −c[i−1]θ[i+1])/(disin[θi+1]s[i−1])
     # B,P,F,3
     wi = (theta_i-ci[:,:,:,[1,2,0]]*theta_i[:,:,:,[2,0,1]]-ci[:,:,:,[2,0,1]]*theta_i[:,:,:,[1,2,0]])/(di*torch.sin(theta_i[:,:,:,[1,2,0]])*si[:,:,:,[2,0,1]])
 
     # ignore coplaner outside triangle
-    wi = torch.where(torch.any(torch.abs(si) <= 1e-8, keepdim=True, dim=-1), torch.zeros_like(wi), wi)
+    wi = torch.where(torch.any(torch.abs(si) <= 1e-5, keepdim=True, dim=-1), torch.zeros_like(wi), wi)
 
     # inside triangle
     inside_triangle = (PI-h).squeeze(-1)<1e-3
@@ -829,6 +839,10 @@ def mean_value_coordinates_3D(query, vertices, faces):
     sumWj = torch.where(sumWj==0, torch.ones_like(sumWj), sumWj)
 
     wj = wj / sumWj
+    # if wj.requires_grad:
+    #     saved_variables["dwi"] = wi.detach()
+    #     wi.register_hook(save_grad("dwi"))
+    #     wj.register_hook(save_grad("dwj"))
     return wj
 
 
