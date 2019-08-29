@@ -6,7 +6,7 @@ https://github.com/erikwijmans/Pointnet2_PyTorch
 import torch
 import faiss
 import numpy as np
-from threading import Thread
+from scipy import sparse
 
 from .._ext import sampling
 from .._ext import linalg
@@ -295,7 +295,7 @@ class GatherFunction(torch.autograd.Function):
         return grad_features, None
 
 
-gather_points = GatherFunction.apply
+gather_points = GatherFunction.apply  # type: ignore
 
 
 class BallQuery(torch.autograd.Function):
@@ -324,7 +324,7 @@ class BallQuery(torch.autograd.Function):
         return None, None, None, None
 
 
-ball_query = BallQuery.apply
+ball_query = BallQuery.apply  # type: ignore
 
 
 class GroupingOperation(torch.autograd.Function):
@@ -369,7 +369,7 @@ class GroupingOperation(torch.autograd.Function):
         return grad_features, None
 
 
-grouping_operation = GroupingOperation.apply
+grouping_operation = GroupingOperation.apply  # type: ignore
 
 
 class QueryAndGroup(torch.nn.Module):
@@ -457,7 +457,7 @@ class FurthestPointSampling(torch.autograd.Function):
         return idx
 
 
-__furthest_point_sample = FurthestPointSampling.apply
+__furthest_point_sample = FurthestPointSampling.apply  # type: ignore
 
 
 def furthest_point_sample(xyz, npoint, NCHW=True, seedIdx=0):
@@ -957,7 +957,7 @@ if __name__ == '__main__':
     from torch.autograd import gradcheck
     # test = gradcheck(furthest_point_sample, [pc, 1250], eps=1e-6, atol=1e-4)
     # print(test)
-    test = gradcheck(gather_points, [pc.to(
+    test = gradcheck(gather_points, [pc.to(  # type: ignore
         dtype=torch.float64), idx], eps=1e-6, atol=1e-4)
 
     print(test)

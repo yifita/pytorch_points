@@ -413,7 +413,7 @@ class NmDistanceFunction(torch.autograd.Function):
         return gradxyz1, gradxyz2
 
 
-nndistance = NmDistanceFunction.apply
+nndistance = NmDistanceFunction.apply  # type: ignore
 
 class ChamferLoss(torch.nn.Module):
     """
