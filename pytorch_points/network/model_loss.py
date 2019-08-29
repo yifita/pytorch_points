@@ -163,9 +163,11 @@ class PointStretchLoss(torch.nn.Module):
         if self.reduction == "mean":
             return torch.mean(stretch)
         elif self.reduction == "sum":
-            return torch.sum(stretch)
+            return torch.mean(torch.sum(stretch, dim=-1))
         elif self.reduction == "none":
             return stretch
+        elif self.reduction == "max":
+            return torch.mean(torch.max(stretch, dim=-1)[0])
         else:
             raise NotImplementedError
 
@@ -222,12 +224,12 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         loss = torch.stack(loss, dim=0)
         if self.reduction == "mean":
             loss = torch.mean(loss)
+        elif self.reduction == "max":
+            return torch.mean(torch.max(loss, dim=-1)[0])
         elif self.reduction == "sum":
-            loss = torch.sum(loss)
+            return loss.mean(torch.sum(loss, dim=-1))
         elif self.reduction == "none":
             loss = loss
-        elif self.reduction == "max":
-            loss = torch.max(loss)
         else:
             raise NotImplementedError
         return loss
@@ -235,10 +237,9 @@ class MeshEdgeLengthLoss(torch.nn.Module):
 
 class MeshStretchLoss(MeshEdgeLengthLoss):
     """Penalize increase of edge length"""
-    def __init__(self, n_vertices=None, faces=None, reduction="mean", max=True):
+    def __init__(self, n_vertices=None, faces=None, reduction="mean"):
         super().__init__(None, n_vertices=n_vertices, faces=faces)
         self.reduction = reduction
-        self.max = max
 
     def forward(self, refV, V, faces=None):
         assert(refV.shape == V.shape)
@@ -261,22 +262,19 @@ class MeshStretchLoss(MeshEdgeLengthLoss):
             edge_length1 = torch.sum(edge1*edge1, dim=-1)
             edge_length2 = torch.sum(edge2*edge2, dim=-1)
             stretch = torch.max(edge_length2/edge_length2-1, torch.zeros_like(edge_length1))
-            if self.max:
-                loss.append(stretch.max())
-            else:
+            if self.reduction in ("mean", "none"):
                 loss.append(stretch.mean())
+            elif self.reduction == "max":
+                loss.append(stretch.max())
+            elif self.reduction == "sum":
+                loss.append(stretch.sum())
+            else:
+                raise NotImplementedError
+            return loss
 
         loss = torch.stack(loss, dim=0)
-        if self.reduction == "mean":
-            loss = torch.mean(loss)
-        elif self.reduction == "sum":
-            loss = torch.sum(loss)
-        elif self.reduction == "none":
-            loss = loss
-        elif self.reduction == "max":
-            loss = torch.max(loss)
-        else:
-            raise NotImplementedError
+        if self.reduction != "none":
+            loss = loss.mean()
         return loss
 
 
@@ -296,10 +294,9 @@ class SimpleMeshRepulsionLoss(MeshEdgeLengthLoss):
     """
     Penalize very short mesh edges
     """
-    def __init__(self, threshold, n_vertices=None, faces=None, max=False, reduction="mean"):
+    def __init__(self, threshold, n_vertices=None, faces=None, reduction="mean"):
         super().__init__(None, n_vertices, faces)
         self.threshold2 = threshold*threshold
-        self.max = max
 
     def forward(self, verts1, faces=None):
         """
@@ -321,21 +318,19 @@ class SimpleMeshRepulsionLoss(MeshEdgeLengthLoss):
             edge_length1 = torch.sum(edge1*edge1, dim=-1)
             tmp = 1/(edge_length1+1e-6)
             tmp = torch.where(edge_length1 < self.threshold2, tmp, torch.zeros_like(tmp))
-            if self.max:
-                tmp = tmp.max()
-            else:
+            if self.reduction in ("mean", "none"):
                 tmp = tmp.mean()
+            elif self.reduction == "max":
+                tmp = tmp.max()
+            elif self.reduction == "sum":
+                tmp = tmp.sum()
+            else:
+                raise NotImplementedError
             loss.append(tmp)
 
         loss = torch.stack(loss, dim=0)
-        if self.reduction == "mean":
-            return torch.mean(loss)
-        elif self.reduction == "sum":
-            return torch.sum(loss)
-        elif self.reduction is "none":
-            return loss
-        else:
-            raise NotImplementedError
+        if self.reduction != "none":
+            loss = loss.mean()
 
         return loss
 
@@ -366,15 +361,16 @@ class SimplePointRepulsionLoss(torch.nn.Module):
         loss = 1/torch.sqrt(distance2+1e-4)
         loss = torch.where(distance2 < self.radius2, loss, torch.zeros_like(loss))
         if self.reduction == "mean":
-            return torch.mean(loss)
+            return loss.mean()
+        elif self.reduction == "max":
+            return torch.mean(torch.max(loss, dim=-1)[0])
         elif self.reduction == "sum":
-            return torch.sum(loss)
-        elif self.reduction is "none":
+            return loss.mean(torch.sum(loss, dim=-1))
+        elif self.reduction == "none":
             return loss
-        elif self.reduction is "max":
-            return torch.max(loss)
         else:
             raise NotImplementedError
+        return loss
 
 
 class NmDistanceFunction(torch.autograd.Function):
@@ -425,14 +421,13 @@ class ChamferLoss(torch.nn.Module):
         max (bool): use hausdorf, i.e. use max instead of mean
     """
 
-    def __init__(self, threshold=None, forward_weight=1.0, percentage=1.0, reduction="mean", max=False):
+    def __init__(self, threshold=None, forward_weight=1.0, percentage=1.0, reduction="mean"):
         super(ChamferLoss, self).__init__()
         # only consider distance smaller than threshold*mean(distance) (remove outlier)
         self.__threshold = threshold
         self.forward_weight = forward_weight
         self.percentage = percentage
         self.reduction = reduction
-        self.max = max
 
     def set_threshold(self, value):
         self.__threshold = value
@@ -507,25 +502,20 @@ class ChamferLoss(torch.nn.Module):
             gt2pred = torch.where(gt_mask, gt2pred, torch.zeros_like(gt2pred))
 
         # pred2gt is for each element in gt, the closest distance to this element
-        if self.max:
-            pred2gt = torch.max(pred2gt, dim=1)[0]
-            gt2pred = torch.max(gt2pred, dim=1)[0]
-        else:
-            pred2gt = torch.mean(pred2gt, dim=1)
-            gt2pred = torch.mean(gt2pred, dim=1)
-        CD_dist = self.forward_weight * pred2gt + gt2pred
-        # CD_dist_norm = CD_dist/radius
         if self.reduction == "mean":
-            cd_loss = torch.mean(CD_dist)
+            loss = torch.mean(pred2gt, dim=-1) * self.forward_weight + torch.mean(gt2pred, dim=-1)
+            loss = torch.mean(loss)
         elif self.reduction == "sum":
-            cd_loss = torch.sum(CD_dist)
-        elif self.reduction == "none":
-            cd_loss = CD_dist
+            loss = torch.sum(pred2gt, dim=-1) * self.forward_weight + torch.sum(gt2pred, dim=-1)
+            loss = torch.mean(loss)
         elif self.reduction == "max":
-            cd_loss = torch.max(CD_dist)
+            loss = torch.max(pred2gt, dim=-1)[0] * self.forward_weight + torch.max(gt2pred, dim=-1)[0]
+            loss = torch.mean(loss)
+        elif self.reduction == "none":
+            loss = torch.mean(pred2gt, dim=-1) * self.forward_weight + torch.mean(gt2pred, dim=-1)
         else:
             raise NotImplementedError
-        return cd_loss
+        return loss
 
 
 if __name__ == '__main__':
