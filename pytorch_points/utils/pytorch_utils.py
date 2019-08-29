@@ -7,8 +7,6 @@ from collections import OrderedDict
 saved_variables = {}
 def save_grad(name):
     def hook(grad):
-        if ~check_values(grad):
-            warnings.warn("Invalid value in {}".format(name),category=RuntimeWarning)
         saved_variables[name] = grad
     return hook
 

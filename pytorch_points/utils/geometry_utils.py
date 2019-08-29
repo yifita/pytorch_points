@@ -3,6 +3,7 @@ import random
 import openmesh as om
 import os
 from matplotlib import cm
+import torch
 
 def read_trimesh(filename, **kwargs):
     """
@@ -152,10 +153,25 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, n
     return points
 
 
-def edge_vertex_indices(F, n_vertices):
+def edge_vertex_indices(F):
     """
-    Given V and F return unique edge vertices of a mesh Ex2
+    Given F return unique edge vertices of a mesh Ex2 tensor
+    params:
+        F (F,3) tensor or numpy
+    return:
+        E (E,2) tensor or numpy
     """
-    V = np.zeros((n_vertices, 3))
-    mesh = array_to_mesh(V, F)
-    return mesh.edge_vertex_indices()
+    if isinstance(F, torch.Tensor):
+        # F,3,2
+        edges = torch.stack([F, F[:,[1, 2, 0]]], dim=-1)
+        edges = torch.sort(edges, dim=-1)[0]
+        # Fx3,2
+        edges = edges.reshape(-1, 2)
+        # E,2
+        edges = torch.unique(edges, dim=0)[0]
+    else:
+        edges = np.stack([F, F[:,[1,2,0]]], axis=-1)
+        edges = np.sort(edges, axis=-1)
+        edges = edges.reshape([-1, 2])
+        edges = np.unique(edges, axis=0)
+    return edges

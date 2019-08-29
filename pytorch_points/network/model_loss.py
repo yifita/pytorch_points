@@ -3,7 +3,7 @@ import numpy as np
 from .._ext import losses
 from . import operations
 from ..utils.pytorch_utils import save_grad
-from ..utils.geometry_utils import edge_vertex_indices, array_to_mesh
+from ..utils.geometry_utils import edge_vertex_indices
 
 class MeshLaplacianLoss(torch.nn.Module):
     """
@@ -13,16 +13,17 @@ class MeshLaplacianLoss(torch.nn.Module):
     metric: an instance of a module e.g. L1Loss
     use_cot: cot laplacian is used instead of uniformlaplacian
     """
-    def __init__(self, num_point, faces, metric, use_cot=False):
+    def __init__(self, num_point, faces, metric, use_cot=False, consistent_topology=True):
         super().__init__()
         if use_cot:
-            self.laplacian = operations.CotLaplacian(faces, num_point)
+            self.laplacian = operations.CotLaplacian(faces)
         else:
             self.laplacian = operations.UniformLaplacian(faces, num_point)
 
         self.metric = metric
 
     def forward(self, vert1, vert2):
+        self.laplacian.L = None
         lap1 = self.laplacian(vert1)
         lap2 = self.laplacian(vert2)
         return self.metric(lap1, lap2)
@@ -186,10 +187,9 @@ class MeshEdgeLengthLoss(torch.nn.Module):
     def getEV(faces, n_vertices):
         """return a list of B (E, 2) int64 tensor"""
         B, F, _ = faces.shape
-        faces_np = faces.data.cpu().numpy()
         EV = []
         for b in range(B):
-            EV.append(torch.from_numpy(edge_vertex_indices(F[b], n_vertices).astype(np.int64)))
+            EV.append(edge_vertex_indices(faces[b]))
         return EV
 
     def forward(self, verts1, verts2, faces=None):
@@ -432,7 +432,7 @@ class ChamferLoss(torch.nn.Module):
         self.forward_weight = forward_weight
         self.percentage = percentage
         self.reduction = reduction
-        self.HD = HD
+        self.max = max
 
     def set_threshold(self, value):
         self.__threshold = value
@@ -507,7 +507,7 @@ class ChamferLoss(torch.nn.Module):
             gt2pred = torch.where(gt_mask, gt2pred, torch.zeros_like(gt2pred))
 
         # pred2gt is for each element in gt, the closest distance to this element
-        if self.HD:
+        if self.max:
             pred2gt = torch.max(pred2gt, dim=1)[0]
             gt2pred = torch.max(gt2pred, dim=1)[0]
         else:

@@ -606,27 +606,29 @@ class UniformLaplacian(torch.nn.Module):
         self.batch, self.nf, self.face_deg = faces.shape
         self.faces = faces
         self.nv = nv
+        self.computeLaplacian()
 
+    def computeLaplacian(self):
         offset = torch.arange(0, self.batch).reshape(-1, 1, 1) * self.nv
-        faces = self.faces + offset
+        faces = self.faces + offset.to(device=self.faces.device)
         faces = faces.reshape(-1, self.face_deg)
         # offset index by batch
         row = faces[:, [i for i in range(self.face_deg)]].reshape(-1)
         col = faces[:, [i for i in range(1, self.face_deg)]+[0]].reshape(-1)
         indices = torch.stack([row, col], dim=0)
+        # (BN,BN)
         L = torch.sparse_coo_tensor(indices, -torch.ones_like(col, dtype=torch.float), size=[self.nv*self.batch, self.nv*self.batch])
         L = L.t() + L
+        # (BN)
         Lii = -torch.sparse.sum(L, dim=[1]).to_dense()
         M = torch.sparse_coo_tensor(torch.arange(self.nv*self.batch).unsqueeze(0).expand(2, -1), Lii, size=(self.nv*self.batch, self.nv*self.batch))
         L = L + M
-        # need to divide by diagonal, but can't do it in sparse
-        self.register_buffer('L', L)
-        self.register_buffer('Lii', Lii)
+        self.L = L
+        self.Lii = Lii
 
     def forward(self, verts):
         assert(verts.shape[0] == self.batch)
         assert(verts.shape[1] == self.nv)
-
         verts = verts.reshape(-1, verts.shape[-1])
         x = self.L.mm(verts)
         x = x / (self.Lii.unsqueeze(-1)+1e-12)
@@ -652,6 +654,31 @@ class CotLaplacian(torch.autograd.Function):
         self.F = faces.data
         self.L = None
 
+    def computeLaplacian(self, V):
+        print('Computing the Laplacian!')
+        B,N,_ = V.shape
+        # Compute cotangents
+        C = cotangent(V, self.F)
+        C_np = C.cpu().numpy()
+        batchC = C_np.reshape(-1, 3)
+        # Adjust face indices to stack:
+        offset = np.arange(0, V.size(0)).reshape(-1, 1, 1) * V.size(1)
+        F_np = self.F_np + offset
+        batchF = F_np.reshape(-1, 3)
+
+        rows = batchF[:, [1, 2, 0]].reshape(-1) #1,2,0 i.e to vertex 2-3 associate cot(23)
+        cols = batchF[:, [2, 0, 1]].reshape(-1) #2,0,1 This works because triangles are oriented ! (otherwise 23 could be associated to more than 1 cot))
+
+        # Final size is BN x BN
+        BN = B*N
+        L = sparse.csr_matrix((batchC.reshape(-1), (rows, cols)), shape=(BN,BN))
+        L = L + L.T
+        # np.sum on sparse is type 'matrix', so convert to np.array
+        M = sparse.diags(np.array(np.sum(L, 1)).reshape(-1), format='csr')
+        L = L - M
+        # remember this
+        self.L = L
+
     def forward(self, V):
         """
         If forward is explicitly called, V is still a Parameter or Variable
@@ -665,33 +692,11 @@ class CotLaplacian(torch.autograd.Function):
 
         Numpy also doesnt support sparse tensor, so stack along the batch
         """
-
         V_np = V.cpu().numpy()
         batchV = V_np.reshape(-1, 3)
 
         if self.L is None:
-            print('Computing the Laplacian!')
-            # Compute cotangents
-            C = cotangent(V, self.F)
-            C_np = C.cpu().numpy()
-            batchC = C_np.reshape(-1, 3)
-            # Adjust face indices to stack:
-            offset = np.arange(0, V.size(0)).reshape(-1, 1, 1) * V.size(1)
-            F_np = self.F_np + offset
-            batchF = F_np.reshape(-1, 3)
-
-            rows = batchF[:, [1, 2, 0]].reshape(-1) #1,2,0 i.e to vertex 2-3 associate cot(23)
-            cols = batchF[:, [2, 0, 1]].reshape(-1) #2,0,1 This works because triangles are oriented ! (otherwise 23 could be associated to more than 1 cot))
-
-            # Final size is BN x BN
-            BN = batchV.shape[0]
-            L = sparse.csr_matrix((batchC.reshape(-1), (rows, cols)), shape=(BN,BN))
-            L = L + L.T
-            # np.sum on sparse is type 'matrix', so convert to np.array
-            M = sparse.diags(np.array(np.sum(L, 1)).reshape(-1), format='csr')
-            L = L - M
-            # remember this
-            self.L = L
+            self.computeLaplacian(V)
 
         Lx = self.L.dot(batchV).reshape(V_np.shape)
 
@@ -829,7 +834,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
     wi = torch.where(inside_triangle.unsqueeze(-1), torch.sin(theta_i)*di[:,:,:,[2,0,1]]*di[:,:,:,[1,2,0]], wi)
 
     # per face -> vertex (B,P,F*3) -> (B,P,N)
-    wj = scatter_add(wi.view(B,P,-1), faces.unsqueeze(1).expand(-1,P,-1,-1).view(B,P,-1),2)
+    wj = scatter_add(wi.view(B,P,-1), faces.unsqueeze(1).expand(-1,P,-1,-1).reshape(B,P,-1),2)
 
     # close to vertex (B,P,N)
     close_to_point = dj.squeeze(-1) < 1e-8
