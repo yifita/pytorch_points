@@ -19,9 +19,22 @@ def read_trimesh(filename):
     F = np.stack(face_lists, axis=0)
     return V, F
 
-def write_trimesh(filename, V, F, v_colors=None, cmap_name="Set1"):
+def write_trimesh(filename, V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name="Set1"):
     """
     write a mesh with (N,3) vertices and (F,3) faces to file
+    """
+    assert(V.ndim==2)
+    assert(F.ndim==2)
+    assert(F.shape[-1]==3)
+
+    mesh = array_to_mesh(V, F, v_colors=v_colors, f_colors=f_colors, v_normals=v_normals, cmap_name=cmap_name)
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    om.write_mesh(filename, mesh, vertex_color=mesh.has_vertex_colors())
+
+
+def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name="Set1"):
+    """
+    convert a mesh with (N,3) vertices and (F,3) faces to a trimesh object
     """
     assert(V.ndim==2)
     assert(F.ndim==2)
@@ -30,6 +43,7 @@ def write_trimesh(filename, V, F, v_colors=None, cmap_name="Set1"):
     mesh = om.TriMesh()
     if v_colors is not None:
         assert(v_colors.shape[0]==V.shape[0])
+        # 1D scalar for each face
         if v_colors.size == V.shape[0]:
             cmap = cm.get_cmap(cmap_name)
             minV, maxV = v_colors.min(), v_colors.max()
@@ -37,6 +51,15 @@ def write_trimesh(filename, V, F, v_colors=None, cmap_name="Set1"):
             v_colors = [cmap(color) for color in v_colors]
         mesh.request_vertex_colors()
 
+    if f_colors is not None:
+        assert(f_colors.shape[0]==F.shape[0])
+        # 1D scalar for each face
+        if f_colors.size == F.shape[0]:
+            cmap = cm.get_cmap(cmap_name)
+            minV, maxV = f_colors.min(), f_colors.max()
+            f_colors = (f_colors-minV)/maxV
+            f_colors = [cmap(color) for color in f_colors]
+        mesh.request_face_colors()
 
     for v in range(V.shape[0]):
         vh = mesh.add_vertex(V[v])
@@ -46,9 +69,15 @@ def write_trimesh(filename, V, F, v_colors=None, cmap_name="Set1"):
     for f in range(F.shape[0]):
         vh_list = [mesh.vertex_handle(vIdx) for vIdx in F[f]]
         fh0 = mesh.add_face(vh_list)
+        if mesh.has_face_colors() and f_colors is not None:
+            mesh.set_color(vh, f_colors[v])
 
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
-    om.write_mesh(filename, mesh, vertex_color=mesh.has_vertex_colors())
+    mesh.request_face_normals()
+    if v_normals:
+        mesh.request_face_normals()
+
+    mesh.update_normals()
+    return mesh
 
 
 def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, numVerts) :
@@ -99,3 +128,12 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, n
         angle = angle + angleSteps[i]
 
     return points
+
+
+def edge_vertex_indices(F, n_vertices):
+    """
+    Given V and F return unique edge vertices of a mesh Ex2
+    """
+    V = np.zeros((n_vertices, 3))
+    mesh = array_to_mesh(V, F)
+    return mesh.edge_vertex_indices()

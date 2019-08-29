@@ -105,6 +105,11 @@ def get_learning_rate(optimizer):
         return param_group['lr']
 
 
+def set_learning_rate(optimizer, lr):
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+
 def tolerating_collate(batch):
     "Puts each data field into a tensor with outer dimension batch size"
     batch = [x for x in filter(lambda x: x is not None, batch)]
