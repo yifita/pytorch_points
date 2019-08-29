@@ -4,20 +4,42 @@ import openmesh as om
 import os
 from matplotlib import cm
 
-def read_trimesh(filename):
+def read_trimesh(filename, **kwargs):
     """
     load vertices and faces of a mesh file
     return:
         V (N,3) floats
         F (F,3) int64
     """
-    mesh = om.read_trimesh(filename)
+    try:
+        mesh = om.read_trimesh(filename, **kwargs)
+    except RuntimeError as e:
+        mesh = om.read_trimesh(filename)
+
     V = mesh.points()
     face_lists = []
     for f in mesh.face_vertex_indices():
         face_lists.append(f)
     F = np.stack(face_lists, axis=0)
-    return V, F
+
+    mesh.request_face_normals()
+    if not mesh.has_vertex_normals():
+        mesh.request_vertex_normals()
+        mesh.update_normals()
+    v_normals = mesh.vertex_normals()
+    f_normals = mesh.face_normals()
+    V = np.concatenate([V, v_normals], axis=-1)
+    F = np.concatenate([F, f_normals], axis=-1)
+
+    properties = {}
+    if mesh.has_vertex_colors():
+        v_colors = mesh.vertex_colors()
+        properties["vertex_colors"] = v_colors
+    if mesh.has_face_colors():
+        f_colors = mesh.face_colors()
+        properties["face_colors"] = f_colors
+
+    return V, F, properties
 
 def write_trimesh(filename, V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name="Set1"):
     """
@@ -74,7 +96,7 @@ def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name=
 
     mesh.request_face_normals()
     if v_normals:
-        mesh.request_face_normals()
+        mesh.request_vertex_normals()
 
     mesh.update_normals()
     return mesh
