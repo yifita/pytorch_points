@@ -20,10 +20,12 @@ class MeshLaplacianLoss(torch.nn.Module):
         else:
             self.laplacian = operations.UniformLaplacian(faces, num_point)
 
+        self.consistent_topology = consistent_topology
         self.metric = metric
 
     def forward(self, vert1, vert2):
-        self.laplacian.L = None
+        if not self.consistent_topology:
+            self.laplacian.L = None
         lap1 = self.laplacian(vert1)
         lap2 = self.laplacian(vert2)
         return self.metric(lap1, lap2)

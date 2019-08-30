@@ -644,12 +644,13 @@ def convert_as(src, trg):
         src = src.cuda(device=trg.get_device())
     return src
 
-class CotLaplacian(torch.autograd.Function):
+class CotLaplacian(torch.nn.Module):
     def __init__(self, faces):
         """
         Faces is B x F x 3, cuda torch Variabe.
         Reuse faces.
         """
+        super().__init__()
         self.F_np = faces.data.cpu().numpy()
         self.F = faces.data
         self.L = None
@@ -692,17 +693,24 @@ class CotLaplacian(torch.autograd.Function):
 
         Numpy also doesnt support sparse tensor, so stack along the batch
         """
-        V_np = V.cpu().numpy()
-        batchV = V_np.reshape(-1, 3)
-
         if self.L is None:
             self.computeLaplacian(V)
 
-        Lx = self.L.dot(batchV).reshape(V_np.shape)
+        Lx = _cotLx(V, self.L)
+        return Lx
 
+
+class _CotLaplacianBatchLx(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, V, L):
+        """V: (B,N,3), L: numpy sparse matrix (BN, 3)"""
+        ctx.L = L
+        batchV = V.reshape(-1, 3).cpu().numpy()
+        Lx = L.dot(batchV)
         return convert_as(torch.Tensor(Lx), V)
 
-    def backward(self, grad_out):
+    @staticmethod
+    def backward(ctx, grad_out):
         """
         Just L'g = Lg
         Args:
@@ -710,12 +718,14 @@ class CotLaplacian(torch.autograd.Function):
         Returns:
            grad_vertices: B x N x 3
         """
+        L = ctx.L
         g_o = grad_out.cpu().numpy()
         # Stack
         g_o = g_o.reshape(-1, 3)
-        Lg = self.L.dot(g_o).reshape(grad_out.shape)
+        Lg = L.dot(g_o).reshape(grad_out.shape)
+        return convert_as(torch.Tensor(Lg), grad_out), None
 
-        return convert_as(torch.Tensor(Lg), grad_out)
+_cotLx = _CotLaplacianBatchLx.apply  # type: ignore
 
 def cotangent(V, F):
     """
@@ -727,7 +737,7 @@ def cotangent(V, F):
         angles for triangles, columns correspond to edges 23,31,12
     B x F x 3 x 3
     """
-    indices_repeat = torch.stack([F, F, F], dim=2)
+    indices_repeat = torch.stack([F, F, F], dim=2).to(device=V.device)
 
     #v1 is the list of first triangles B*F*3, v2 second and v3 third
     v1 = torch.gather(V, 1, indices_repeat[:, :, :, 0].long())
