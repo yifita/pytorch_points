@@ -7,89 +7,36 @@ from ..utils.geometry_utils import edge_vertex_indices
 
 class MeshLaplacianLoss(torch.nn.Module):
     """
-    compare uniform laplacian of two meshes with the same connectivity assuming known correspondence
-    num_point: number of vertices
-    faces: (B,F,L) face indices
+    compare laplacian of two meshes with the same connectivity assuming known correspondence
     metric: an instance of a module e.g. L1Loss
     use_cot: cot laplacian is used instead of uniformlaplacian
+    consistent_topology: assume face matrix is the same during the entire use
     """
-    def __init__(self, num_point, faces, metric, use_cot=False, consistent_topology=True):
+    def __init__(self, metric, use_cot=False, use_norm=False, consistent_topology=False):
         super().__init__()
         if use_cot:
-            self.laplacian = operations.CotLaplacian(faces)
+            self.laplacian = operations.CotLaplacian()
         else:
-            self.laplacian = operations.UniformLaplacian(faces, num_point)
+            self.laplacian = operations.UniformLaplacian()
 
+        self.use_norm = use_norm
         self.consistent_topology = consistent_topology
         self.metric = metric
 
-    def forward(self, vert1, vert2):
+    def forward(self, vert1, vert2=None, face=None):
         if not self.consistent_topology:
             self.laplacian.L = None
-        lap1 = self.laplacian(vert1)
-        lap2 = self.laplacian(vert2)
-        return self.metric(lap1, lap2)
 
-class LaplacianSmoothnessLoss(object):
-    """
-    Encourages minimal mean curvature shapes.
-    """
-    def __init__(self, faces, vert, toref=True):
-        # Input:
-        #  faces: B x F x 3
-        self.toref = toref
-        # V x V
-        self.laplacian = operations.CotLaplacian(faces)
-        self.Lx = None
-        tmp = self.laplacian(vert)
-        self.curve_gt = torch.norm(tmp.view(-1, tmp.size(2)), p=2, dim=1).float()
-        if not self.toref:
-            self.curve_gt = self.curve_gt*0
-
-    def __call__(self, verts):
-        self.Lx = self.laplacian(verts)
-        # Reshape to BV x 3
-        Lx = self.Lx.view(-1, self.Lx.size(2))
-        loss = (torch.norm(Lx, p=2, dim=1).float()-self.curve_gt).mean()
-        return loss
-
-
-class UniformLaplacianSmoothnessLoss(torch.nn.Module):
-    """
-    Encourages minimal mean curvature shapes.
-    """
-    def __init__(self, num_point, faces, metric):
-        super().__init__()
-        self.laplacian = operations.UniformLaplacian(faces, num_point)
-        self.metric = metric
-
-    def __call__(self, vert, vert_ref=None):
-        lap = self.laplacian(vert)
-        curve = torch.norm(lap, p=2, dim=-1)
-        if vert_ref is not None:
-            lap_ref = self.laplacian(vert)
-            curve_gt = torch.norm(lap_ref, p=2, dim=-1)
-            loss = self.metric(curve, curve_gt)
+        lap1 = self.laplacian(vert1, face)
+        if self.use_norm:
+            lap1 = torch.norm(lap1, dim=-1, p=2)
+        if vert2 is not None:
+            lap2 = self.laplacian(vert2, face)
+            if self.use_norm:
+                lap2 = torch.norm(lap2, dim=-1, p=2)
         else:
-            loss = curve
-        return loss
-
-
-class SmapeLoss(torch.nn.Module):
-    """
-    relative L1 norm
-    http://drz.disneyresearch.com/~jnovak/publications/KPAL/KPAL.pdf eq(2)
-    """
-    def __init__(self, epsilon=1e-8):
-        super(SmapeLoss, self).__init__()
-        self.epsilon = epsilon
-
-    def forward(self, x, y):
-        """
-        x pred  (N,3)
-        y label (N,3)
-        """
-        return torch.mean(torch.abs(x-y)/(torch.abs(x)+torch.abs(y)+self.epsilon))
+            lap2 = torch.zeros_like(lap1)
+        return self.metric(lap1, lap2)
 
 
 class PointLaplacianLoss(torch.nn.Module):
@@ -97,10 +44,11 @@ class PointLaplacianLoss(torch.nn.Module):
     compare uniform laplacian of two point clouds assuming known correspondence
     metric: an instance of a module e.g. L1Loss
     """
-    def __init__(self, nn_size, metric):
+    def __init__(self, nn_size, metric, use_norm=False):
         super().__init__()
         self.metric = metric
         self.nn_size = nn_size
+        self.use_norm = use_norm
 
     def forward(self, point1, point2):
         """
@@ -109,6 +57,9 @@ class PointLaplacianLoss(torch.nn.Module):
         """
         lap1, knn_idx = operations.pointUniformLaplacian(point1, nn_size=self.nn_size)
         lap2, _ = operations.pointUniformLaplacian(point2, knn_idx=knn_idx)
+        if self.use_norm:
+            lap1 = torch.norm(lap1, dim=-1, p=2)
+            lap2 = torch.norm(lap2, dim=-1, p=2)
         return self.metric(lap1, lap2)
 
 
@@ -174,18 +125,16 @@ class PointStretchLoss(torch.nn.Module):
             raise NotImplementedError
 
 
+
 class MeshEdgeLengthLoss(torch.nn.Module):
     """
     Penalize large edge deformation for meshes of the same topology (assuming correspondance)
     faces (B,F,L)
     """
-    def __init__(self, metric, n_vertices=None, faces=None):
+    def __init__(self, metric, consistent_topology=False):
         super().__init__()
         self.metric = metric
         self.E = None
-        # construct edge index array
-        if (faces is not None) and (n_vertices is not None):
-            self.E = self.getEV(faces, n_vertices)
 
     @staticmethod
     def getEV(faces, n_vertices):
@@ -205,7 +154,7 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         assert(verts1.shape == verts2.shape)
         B, P, _ = verts1.shape
         F = faces.shape[1]
-        if self.E is None:
+        if (not self.consistent_topology) or (self.E is None):
             assert(faces is not None), "Faces is required"
             self.E = self.getEV(faces, P)
 
@@ -224,24 +173,25 @@ class MeshEdgeLengthLoss(torch.nn.Module):
             loss.append(self.metric(edge_length1, edge_length2))
 
         loss = torch.stack(loss, dim=0)
-        if self.reduction == "mean":
-            loss = torch.mean(loss)
-        elif self.reduction == "max":
-            return torch.mean(torch.max(loss, dim=-1)[0])
-        elif self.reduction == "sum":
-            return loss.mean(torch.sum(loss, dim=-1))
-        elif self.reduction == "none":
-            loss = loss
-        else:
-            raise NotImplementedError
+        loss = torch.mean(loss)
+
         return loss
 
 
-class MeshStretchLoss(MeshEdgeLengthLoss):
+class MeshStretchLoss(torch.nn.Module):
     """Penalize increase of edge length"""
-    def __init__(self, n_vertices=None, faces=None, reduction="mean"):
-        super().__init__(None, n_vertices=n_vertices, faces=faces)
-        self.reduction = reduction
+    def __init__(self, reduction="mean", consistent_topology=False):
+        super().__init__()
+
+
+    @staticmethod
+    def getEV(faces, n_vertices):
+        """return a list of B (E, 2) int64 tensor"""
+        B, F, _ = faces.shape
+        EV = []
+        for b in range(B):
+            EV.append(edge_vertex_indices(faces[b]))
+        return EV
 
     def forward(self, refV, V, faces=None):
         assert(refV.shape == V.shape)
@@ -277,27 +227,17 @@ class MeshStretchLoss(MeshEdgeLengthLoss):
         loss = torch.stack(loss, dim=0)
         if self.reduction != "none":
             loss = loss.mean()
+
         return loss
 
 
-class NormalLoss(torch.nn.Module):
-    def __init__(self, metric, nn_size=10):
-        self.nn_size = nn_size
-        self.metric = metric
 
-    def forward(self, pred, gt):
-        pred_normals = operations.batch_normals(pred, nn_size=10, NCHW=True)
-        gt_normals = operations.batch_normals(gt, nn_size=10, NCHW=True)
-        # compare the normal with the closest point
-        return self.metric(pred_normals, gt_normals)
-
-
-class SimpleMeshRepulsionLoss(MeshEdgeLengthLoss):
+class SimpleMeshRepulsionLoss(MeshStretchLoss):
     """
     Penalize very short mesh edges
     """
-    def __init__(self, threshold, n_vertices=None, faces=None, reduction="mean"):
-        super().__init__(None, n_vertices, faces)
+    def __init__(self, threshold, reduction="mean", consistent_topology=False):
+        super().__init__(reduction=reduction, consistent_topology=consistent_topology)
         self.threshold2 = threshold*threshold
 
     def forward(self, verts1, faces=None):
@@ -335,6 +275,34 @@ class SimpleMeshRepulsionLoss(MeshEdgeLengthLoss):
             loss = loss.mean()
 
         return loss
+
+class SmapeLoss(torch.nn.Module):
+    """
+    relative L1 norm
+    http://drz.disneyresearch.com/~jnovak/publications/KPAL/KPAL.pdf eq(2)
+    """
+    def __init__(self, epsilon=1e-8):
+        super(SmapeLoss, self).__init__()
+        self.epsilon = epsilon
+
+    def forward(self, x, y):
+        """
+        x pred  (N,3)
+        y label (N,3)
+        """
+        return torch.mean(torch.abs(x-y)/(torch.abs(x)+torch.abs(y)+self.epsilon))
+
+class NormalLoss(torch.nn.Module):
+    def __init__(self, metric, nn_size=10):
+        self.nn_size = nn_size
+        self.metric = metric
+
+    def forward(self, pred, gt):
+        pred_normals = operations.batch_normals(pred, nn_size=10, NCHW=True)
+        gt_normals = operations.batch_normals(gt, nn_size=10, NCHW=True)
+        # compare the normal with the closest point
+        return self.metric(pred_normals, gt_normals)
+
 
 class SimplePointRepulsionLoss(torch.nn.Module):
     """
@@ -521,6 +489,8 @@ class ChamferLoss(torch.nn.Module):
 
 
 if __name__ == '__main__':
+    from .operations import normalize_point_batch
+    from ..utils.geometry_utils import array_to_mesh, write_trimesh
     pc1 = torch.randn([2, 600, 2], dtype=torch.float32,
                       requires_grad=True).cuda()
     pc2 = torch.randn([2, 600, 2], dtype=torch.float32,
@@ -530,6 +500,23 @@ if __name__ == '__main__':
     edgeShouldBeZero = edgeLoss(pc1, pc1)
     print(edgeShouldBeZero)
     assert(torch.all(edgeShouldBeZero == 0))
+
+    shape_laplacian = MeshLaplacianLoss(torch.nn.MSELoss(reduction="none"), use_cot=False, use_norm=True, consistent_topology=True)
+    faces = torch.from_numpy(np.loadtxt("/home/yifan/Data/Chicken-3D-movie/chicken_T.txt", dtype=np.int64)).unsqueeze(0)
+    sequence = torch.from_numpy(np.load("/home/yifan/Data/Chicken-3D-movie/vertices.npy")).to(dtype=torch.float32)
+    sequence, _, _ = normalize_point_batch(sequence, NCHW=False)
+    mesh = array_to_mesh(sequence[0].numpy(), faces[0].numpy(), v_normals=True)
+    source_shape = torch.narrow(sequence, 0, 0, 1)
+    target_shape = torch.narrow(sequence, 0, 354, 1)
+    loss = shape_laplacian(vert1=source_shape, vert2=target_shape, face=faces)
+    print("min lap", loss.min(), "max lap", loss.max())
+    write_trimesh("./test_mesh_laplacian1.ply", source_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
+    write_trimesh("./test_mesh_laplacian2.ply", target_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
+    # _v = mesh.points()
+    # _v[:] = source_shape.numpy()
+    # mesh.update_normals()
+    # target_normals = torch.from_numpy(mesh.vertex_normals()).to(dtype=torch.float32).unsqueeze(0)
+
     # test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
     # print(test)
     # from torch.autograd import gradcheck

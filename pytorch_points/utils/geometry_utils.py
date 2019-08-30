@@ -62,9 +62,15 @@ def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name=
     assert(V.ndim==2)
     assert(F.ndim==2)
     assert(F.shape[-1]==3)
+    if isinstance(V, torch.Tensor):
+        V = V.detach().cpu().numpy()
+    if isinstance(F, torch.Tensor):
+        F = F.detach().cpu().numpy()
 
     mesh = om.TriMesh()
     if v_colors is not None:
+        if isinstance(v_colors, torch.Tensor):
+            v_colors = F.detach().cpu().numpy()
         assert(v_colors.shape[0]==V.shape[0])
         # 1D scalar for each face
         if v_colors.size == V.shape[0]:
@@ -155,17 +161,17 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, n
 
 def edge_vertex_indices(F):
     """
-    Given F return unique edge vertices of a mesh Ex2 tensor
+    Given F matrix of a triangle mesh return unique edge vertices of a mesh Ex2 tensor
     params:
-        F (F,3) tensor or numpy
+        F (F,L) tensor or numpy
     return:
         E (E,2) tensor or numpy
     """
     if isinstance(F, torch.Tensor):
-        # F,3,2
+        # F,L,2
         edges = torch.stack([F, F[:,[1, 2, 0]]], dim=-1)
         edges = torch.sort(edges, dim=-1)[0]
-        # Fx3,2
+        # FxL,2
         edges = edges.reshape(-1, 2)
         # E,2
         edges = torch.unique(edges, dim=0)[0]

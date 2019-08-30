@@ -601,38 +601,43 @@ class UniformLaplacian(torch.nn.Module):
     vertex B,N,D
     faces  B,F,L
     """
-    def __init__(self, faces, nv):
+    def __init__(self):
         super().__init__()
-        self.batch, self.nf, self.face_deg = faces.shape
-        self.faces = faces
-        self.nv = nv
-        self.computeLaplacian()
+        self.L = None
 
-    def computeLaplacian(self):
-        offset = torch.arange(0, self.batch).reshape(-1, 1, 1) * self.nv
-        faces = self.faces + offset.to(device=self.faces.device)
-        faces = faces.reshape(-1, self.face_deg)
+    def computeLaplacian(self, V, F):
+        batch, nv = V.shape[:2]
+        V = V.reshape(-1, V.shape[-1])
+        face_deg = F.shape[-1]
+        offset = torch.arange(0, batch).reshape(-1, 1, 1) * nv
+        faces = F + offset.to(device=F.device)
+        faces = faces.reshape(-1, face_deg)
         # offset index by batch
-        row = faces[:, [i for i in range(self.face_deg)]].reshape(-1)
-        col = faces[:, [i for i in range(1, self.face_deg)]+[0]].reshape(-1)
+        row = faces[:, [i for i in range(face_deg)]].reshape(-1)
+        col = faces[:, [i for i in range(1, face_deg)]+[0]].reshape(-1)
         indices = torch.stack([row, col], dim=0)
+
         # (BN,BN)
-        L = torch.sparse_coo_tensor(indices, -torch.ones_like(col, dtype=torch.float), size=[self.nv*self.batch, self.nv*self.batch])
+        L = torch.sparse_coo_tensor(indices, -torch.ones_like(col, dtype=V.dtype, device=V.device), size=[nv*batch, nv*batch])
         L = L.t() + L
         # (BN)
         Lii = -torch.sparse.sum(L, dim=[1]).to_dense()
-        M = torch.sparse_coo_tensor(torch.arange(self.nv*self.batch).unsqueeze(0).expand(2, -1), Lii, size=(self.nv*self.batch, self.nv*self.batch))
+        M = torch.sparse_coo_tensor(torch.arange(nv*batch).unsqueeze(0).expand(2, -1), Lii, size=(nv*batch, nv*batch))
         L = L + M
         self.L = L
         self.Lii = Lii
 
-    def forward(self, verts):
-        assert(verts.shape[0] == self.batch)
-        assert(verts.shape[1] == self.nv)
+    def forward(self, verts, faces):
+        batch, nv = verts.shape[:2]
+        assert(verts.shape[0] == batch)
+        assert(verts.shape[1] == nv)
+
+        if self.L is None:
+            self.computeLaplacian(verts, faces)
         verts = verts.reshape(-1, verts.shape[-1])
         x = self.L.mm(verts)
         x = x / (self.Lii.unsqueeze(-1)+1e-12)
-        x = x.reshape([self.batch, self.nv, -1])
+        x = x.reshape([batch, nv, -1])
         return x
 
 #############
@@ -645,26 +650,26 @@ def convert_as(src, trg):
     return src
 
 class CotLaplacian(torch.nn.Module):
-    def __init__(self, faces):
+    def __init__(self):
         """
         Faces is B x F x 3, cuda torch Variabe.
         Reuse faces.
         """
         super().__init__()
-        self.F_np = faces.data.cpu().numpy()
-        self.F = faces.data
         self.L = None
 
-    def computeLaplacian(self, V):
+    def computeLaplacian(self, V, F):
         print('Computing the Laplacian!')
+        F_np = F.data.cpu().numpy()
+        F = F.data
         B,N,_ = V.shape
         # Compute cotangents
-        C = cotangent(V, self.F)
+        C = cotangent(V, F)
         C_np = C.cpu().numpy()
         batchC = C_np.reshape(-1, 3)
         # Adjust face indices to stack:
         offset = np.arange(0, V.size(0)).reshape(-1, 1, 1) * V.size(1)
-        F_np = self.F_np + offset
+        F_np = F_np + offset
         batchF = F_np.reshape(-1, 3)
 
         rows = batchF[:, [1, 2, 0]].reshape(-1) #1,2,0 i.e to vertex 2-3 associate cot(23)
@@ -680,7 +685,7 @@ class CotLaplacian(torch.nn.Module):
         # remember this
         self.L = L
 
-    def forward(self, V):
+    def forward(self, V, F=None):
         """
         If forward is explicitly called, V is still a Parameter or Variable
         But if called through __call__ it's a tensor.
@@ -694,7 +699,8 @@ class CotLaplacian(torch.nn.Module):
         Numpy also doesnt support sparse tensor, so stack along the batch
         """
         if self.L is None:
-            self.computeLaplacian(V)
+            assert(F is not None)
+            self.computeLaplacian(V, F)
 
         Lx = _cotLx(V, self.L)
         return Lx
@@ -719,10 +725,11 @@ class _CotLaplacianBatchLx(torch.autograd.Function):
            grad_vertices: B x N x 3
         """
         L = ctx.L
+        sh = grad_out.shape
         g_o = grad_out.cpu().numpy()
         # Stack
         g_o = g_o.reshape(-1, 3)
-        Lg = L.dot(g_o).reshape(grad_out.shape)
+        Lg = L.dot(g_o).reshape(sh)
         return convert_as(torch.Tensor(Lg), grad_out), None
 
 _cotLx = _CotLaplacianBatchLx.apply  # type: ignore
