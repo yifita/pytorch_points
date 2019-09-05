@@ -174,7 +174,7 @@ def edge_vertex_indices(F):
         # FxL,2
         edges = edges.reshape(-1, 2)
         # E,2
-        edges = torch.unique(edges, dim=0)[0]
+        edges = torch.unique(edges, dim=0)
     else:
         edges = np.stack([F, F[:,[1,2,0]]], axis=-1)
         edges = np.sort(edges, axis=-1)

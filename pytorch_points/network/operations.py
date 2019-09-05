@@ -826,17 +826,17 @@ def mean_value_coordinates_3D(query, vertices, faces):
     di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
                       faces.unsqueeze(1).expand(-1,P,-1,-1))
     assert(check_values(di))
-    if si.requires_grad:
-        saved_variables["di"] = di.detach()
-        saved_variables["si"] = si.detach()
-        saved_variables["ci"] = ci.detach()
-        saved_variables["thetai"] = theta_i.detach()
-        saved_variables["li"] = li.detach()
-        li.register_hook(save_grad("dli"))
-        theta_i.register_hook(save_grad("dtheta"))
-        ci.register_hook(save_grad("dci"))
-        si.register_hook(save_grad("dsi"))
-        di.register_hook(save_grad("ddi"))
+    # if si.requires_grad:
+    #     saved_variables["di"] = di.detach()
+    #     saved_variables["si"] = si.detach()
+    #     saved_variables["ci"] = ci.detach()
+    #     saved_variables["thetai"] = theta_i.detach()
+    #     saved_variables["li"] = li.detach()
+    #     li.register_hook(save_grad("dli"))
+    #     theta_i.register_hook(save_grad("dtheta"))
+    #     ci.register_hook(save_grad("dci"))
+    #     si.register_hook(save_grad("dsi"))
+    #     di.register_hook(save_grad("ddi"))
     # wi← (θi −c[i+1]θ[i−1] −c[i−1]θ[i+1])/(disin[θi+1]s[i−1])
     # B,P,F,3
     wi = (theta_i-ci[:,:,:,[1,2,0]]*theta_i[:,:,:,[2,0,1]]-ci[:,:,:,[2,0,1]]*theta_i[:,:,:,[1,2,0]])/(di*torch.sin(theta_i[:,:,:,[1,2,0]])*si[:,:,:,[2,0,1]])
@@ -864,10 +864,10 @@ def mean_value_coordinates_3D(query, vertices, faces):
     sumWj = torch.where(sumWj==0, torch.ones_like(sumWj), sumWj)
 
     wj = wj / sumWj
-    if wj.requires_grad:
-        saved_variables["dwi"] = wi.detach()
-        wi.register_hook(save_grad("dwi"))
-        wj.register_hook(save_grad("dwj"))
+    # if wj.requires_grad:
+    #     saved_variables["dwi"] = wi.detach()
+    #     wi.register_hook(save_grad("dwi"))
+    #     wj.register_hook(save_grad("dwj"))
     return wj
 
 

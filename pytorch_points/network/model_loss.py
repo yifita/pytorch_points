@@ -5,6 +5,47 @@ from . import operations
 from ..utils.pytorch_utils import save_grad
 from ..utils.geometry_utils import edge_vertex_indices
 
+class MeshLaplacianLoss_old(torch.nn.Module):
+    """
+    compare uniform laplacian of two meshes assuming known correspondence
+    num_point: number of vertices
+    faces: (B,F,L) face indices
+    metric: an instance of a module e.g. L1Loss
+    """
+    def __init__(self, num_point, faces, metric):
+        super().__init__()
+        self.laplacian1 = operations.UniformLaplacian()
+        self.laplacian2 = operations.UniformLaplacian()
+        self.metric = metric
+        self.faces = faces
+
+    def forward(self, vert1, vert2):
+        lap1 = self.laplacian1(vert1, self.faces)
+        lap2 = self.laplacian2(vert2, self.faces)
+        return self.metric(lap1, lap2)
+
+
+class UniformLaplacianSmoothnessLoss(torch.nn.Module):
+    """
+    Encourages minimal mean curvature shapes.
+    """
+    def __init__(self, num_point, faces, metric):
+        super().__init__()
+        self.laplacian = operations.UniformLaplacian()
+        self.metric = metric
+        self.faces = faces
+
+    def __call__(self, vert, vert_ref=None):
+        lap = self.laplacian(vert, self.faces)
+        curve = torch.norm(lap, p=2, dim=-1)
+        if vert_ref is not None:
+            lap_ref = self.laplacian(vert, self.faces)
+            curve_gt = torch.norm(lap_ref, p=2, dim=-1)
+            loss = self.metric(curve, curve_gt)
+        else:
+            loss = curve
+        return loss
+
 class MeshLaplacianLoss(torch.nn.Module):
     """
     compare laplacian of two meshes with the same connectivity assuming known correspondence
@@ -34,10 +75,9 @@ class MeshLaplacianLoss(torch.nn.Module):
             lap2 = self.laplacian(vert2, face)
             if self.use_norm:
                 lap2 = torch.norm(lap2, dim=-1, p=2)
+            return self.metric(lap1,lap2)
         else:
-            lap2 = torch.zeros_like(lap1)
-        return self.metric(lap1, lap2)
-
+            return lap1.mean()
 
 class PointLaplacianLoss(torch.nn.Module):
     """
@@ -135,6 +175,7 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         super().__init__()
         self.metric = metric
         self.E = None
+        self.consistent_topology = consistent_topology
 
     @staticmethod
     def getEV(faces, n_vertices):
@@ -145,25 +186,25 @@ class MeshEdgeLengthLoss(torch.nn.Module):
             EV.append(edge_vertex_indices(faces[b]))
         return EV
 
-    def forward(self, verts1, verts2, faces=None):
+    def forward(self, vert1, vert2, face=None):
         """
-        verts1: (B, N, 3)
-        verts2: (B, N, 3)
+        vert1: (B, N, 3)
+        vert2: (B, N, 3)
         faces:  (B, F, L)
         """
-        assert(verts1.shape == verts2.shape)
-        B, P, _ = verts1.shape
-        F = faces.shape[1]
+        assert(vert1.shape == vert2.shape)
+        B, P, _ = vert1.shape
+        F = face.shape[1]
         if (not self.consistent_topology) or (self.E is None):
-            assert(faces is not None), "Faces is required"
-            self.E = self.getEV(faces, P)
+            assert(face is not None), "Face is required"
+            self.E = self.getEV(face, P)
 
         # (B, E, 2, 3)
         loss = []
         for b in range(B):
             # (P,3) (Ex2) -> (Ex2,3)
-            edge1 = torch.gather(verts1[b], 0, self.E[b].view(-1, 1).expand(-1, verts1.shape[-1])).view(-1, 2, verts1.shape[-1])
-            edge2 = torch.gather(verts2[b], 0, self.E[b].view(-1, 1).expand(-1, verts2.shape[-1])).view(-1, 2, verts2.shape[-1])
+            edge1 = torch.gather(vert1[b], 0, self.E[b].view(-1, 1).expand(-1, vert1.shape[-1])).view(-1, 2, vert1.shape[-1])
+            edge2 = torch.gather(vert2[b], 0, self.E[b].view(-1, 1).expand(-1, vert2.shape[-1])).view(-1, 2, vert2.shape[-1])
 
             edge1 = edge1[:,0,:]-edge1[:,1,:]
             edge2 = edge2[:,0,:]-edge2[:,1,:]
@@ -181,6 +222,9 @@ class MeshEdgeLengthLoss(torch.nn.Module):
 class MeshStretchLoss(torch.nn.Module):
     """Penalize increase of edge length"""
     def __init__(self, reduction="mean", consistent_topology=False):
+        self.E = None
+        self.reduction = reduction
+        self.consistent_topology = consistent_topology
         super().__init__()
 
 
@@ -193,20 +237,20 @@ class MeshStretchLoss(torch.nn.Module):
             EV.append(edge_vertex_indices(faces[b]))
         return EV
 
-    def forward(self, refV, V, faces=None):
-        assert(refV.shape == V.shape)
-        B, P, _ = refV.shape
-        F = faces.shape[1]
-        if self.E is None:
-            assert(faces is not None), "Faces is required"
-            self.E = self.getEV(faces, P)
+    def forward(self, vert1, vert2, face=None):
+        assert(vert1.shape == vert2.shape)
+        B, P, _ = vert1.shape
+        F = face.shape[1]
+        if (not self.consistent_topology) or self.E is None:
+            assert(face is not None), "Face is required"
+            self.E = self.getEV(face, P)
 
         # (B, E, 2, 3)
         loss = []
         for b in range(B):
             # (P,3) (Ex2) -> (Ex2,3)
-            edge1 = torch.gather(refV[b], 0, self.E[b].view(-1, 1).expand(-1, refV.shape[-1])).view(-1, 2, refV.shape[-1])
-            edge2 = torch.gather(V[b], 0, self.E[b].view(-1, 1).expand(-1, V.shape[-1])).view(-1, 2, V.shape[-1])
+            edge1 = torch.gather(vert1[b], 0, self.E[b].view(-1, 1).expand(-1, vert1.shape[-1])).view(-1, 2, vert1.shape[-1])
+            edge2 = torch.gather(vert2[b], 0, self.E[b].view(-1, 1).expand(-1, vert2.shape[-1])).view(-1, 2, vert2.shape[-1])
 
             edge1 = edge1[:,0,:]-edge1[:,1,:]
             edge2 = edge2[:,0,:]-edge2[:,1,:]
@@ -222,7 +266,6 @@ class MeshStretchLoss(torch.nn.Module):
                 loss.append(stretch.sum())
             else:
                 raise NotImplementedError
-            return loss
 
         loss = torch.stack(loss, dim=0)
         if self.reduction != "none":
@@ -240,16 +283,16 @@ class SimpleMeshRepulsionLoss(MeshStretchLoss):
         super().__init__(reduction=reduction, consistent_topology=consistent_topology)
         self.threshold2 = threshold*threshold
 
-    def forward(self, verts1, faces=None):
+    def forward(self, verts1, face=None):
         """
         verts1: (B, N, 3)
         faces:  (B, F, L)
         """
         B, P, _ = verts1.shape
-        F = faces.shape[1]
-        if self.E is None:
-            assert(faces is not None), "Faces is required"
-            self.E = self.getEV(faces, P)
+        F = face.shape[1]
+        if (not self.consistent_topology) or self.E is None:
+            assert(face is not None), "Face is required"
+            self.E = self.getEV(face, P)
 
         # (B, E, 2, 3)
         loss = []
@@ -490,28 +533,60 @@ class ChamferLoss(torch.nn.Module):
 
 if __name__ == '__main__':
     from .operations import normalize_point_batch
-    from ..utils.geometry_utils import array_to_mesh, write_trimesh
-    pc1 = torch.randn([2, 600, 2], dtype=torch.float32,
-                      requires_grad=True).cuda()
-    pc2 = torch.randn([2, 600, 2], dtype=torch.float32,
-                      requires_grad=True).cuda()
-    chamfer = ChamferLoss()
-    edgeLoss = PointEdgeLengthLoss(nn_size=3, metric=torch.nn.MSELoss())
-    edgeShouldBeZero = edgeLoss(pc1, pc1)
-    print(edgeShouldBeZero)
-    assert(torch.all(edgeShouldBeZero == 0))
+    from ..utils.geometry_utils import array_to_mesh, write_trimesh, generatePolygon
+    # pc1 = torch.randn([2, 600, 2], dtype=torch.float32,
+    #                   requires_grad=True).cuda()
+    # pc2 = torch.randn([2, 600, 2], dtype=torch.float32,
+    #                   requires_grad=True).cuda()
+    # chamfer = ChamferLoss()
+    # edgeLoss = PointEdgeLengthLoss(nn_size=3, metric=torch.nn.MSELoss())
+    # edgeShouldBeZero = edgeLoss(pc1, pc1)
+    # print(edgeShouldBeZero)
+    # assert(torch.all(edgeShouldBeZero == 0))
+
+    # shape_laplacian = MeshLaplacianLoss(torch.nn.MSELoss(reduction="none"), use_cot=False, use_norm=True, consistent_topology=True)
+    # faces = torch.from_numpy(np.loadtxt("/home/yifan/Data/Chicken-3D-movie/chicken_T.txt", dtype=np.int64)).unsqueeze(0)
+    # sequence = torch.from_numpy(np.load("/home/yifan/Data/Chicken-3D-movie/vertices.npy")).to(dtype=torch.float32)
+    # sequence, _, _ = normalize_point_batch(sequence, NCHW=False)
+    # mesh = array_to_mesh(sequence[0].numpy(), faces[0].numpy(), v_normals=True)
+    # source_shape = torch.narrow(sequence, 0, 0, 1)
+    # target_shape = torch.narrow(sequence, 0, 354, 1)
+    # loss = shape_laplacian(vert1=source_shape, vert2=target_shape, face=faces)
+    # print("min lap", loss.min(), "max lap", loss.max())
 
     shape_laplacian = MeshLaplacianLoss(torch.nn.MSELoss(reduction="none"), use_cot=False, use_norm=True, consistent_topology=True)
-    faces = torch.from_numpy(np.loadtxt("/home/yifan/Data/Chicken-3D-movie/chicken_T.txt", dtype=np.int64)).unsqueeze(0)
-    sequence = torch.from_numpy(np.load("/home/yifan/Data/Chicken-3D-movie/vertices.npy")).to(dtype=torch.float32)
-    sequence, _, _ = normalize_point_batch(sequence, NCHW=False)
-    mesh = array_to_mesh(sequence[0].numpy(), faces[0].numpy(), v_normals=True)
-    source_shape = torch.narrow(sequence, 0, 0, 1)
-    target_shape = torch.narrow(sequence, 0, 354, 1)
-    loss = shape_laplacian(vert1=source_shape, vert2=target_shape, face=faces)
-    print("min lap", loss.min(), "max lap", loss.max())
-    write_trimesh("./test_mesh_laplacian1.ply", source_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
-    write_trimesh("./test_mesh_laplacian2.ply", target_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
+    face = torch.arange(0, 20).reshape(1, 1, -1).cuda()
+    smooth_old = UniformLaplacianSmoothnessLoss(20, face, torch.nn.MSELoss(reduction="mean"))
+    shape_laplacian_old = MeshLaplacianLoss_old(20, face, torch.nn.MSELoss(reduction="none"))
+
+    cage = generatePolygon(0, 0, 1.5, 0, 0, 0, 20)
+    cage = torch.tensor([(x, y) for x, y in cage], dtype=torch.float).unsqueeze(0).cuda().requires_grad_(True)
+
+    cage2 = generatePolygon(0, 0, 1.5, 0.1, 0.1, 0.1, 20)
+    cage2 = torch.tensor([(x, y) for x, y in cage2], dtype=torch.float).unsqueeze(0).cuda().requires_grad_(True)
+
+    loss1 = shape_laplacian(vert1=cage, face=face)
+    loss2 = smooth_old(cage)
+    loss1.mean().backward()
+    grad1 = cage.grad
+    loss2.mean().backward()
+    grad2 = cage.grad
+
+    print(torch.eq(grad1, grad2))
+
+    shape_laplacian.use_norm = False
+    loss1 = shape_laplacian(vert1=cage, vert2=cage2, face=face)
+    loss2 = shape_laplacian_old(cage, cage2)
+    loss1.mean().backward()
+    grad1_1 = cage.grad
+    grad1_2 = cage2.grad
+    loss2.mean().backward()
+    grad2_1 = cage.grad
+    grad2_2 = cage2.grad
+    print(torch.eq(grad1_1,grad2_1))
+    print(torch.eq(grad1_2,grad2_2))
+    # write_trimesh("./test_mesh_laplacian1.ply", source_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
+    # write_trimesh("./test_mesh_laplacian2.ply", target_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
     # _v = mesh.points()
     # _v[:] = source_shape.numpy()
     # mesh.update_normals()
