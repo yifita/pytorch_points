@@ -70,7 +70,7 @@ def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name=
     mesh = om.TriMesh()
     if v_colors is not None:
         if isinstance(v_colors, torch.Tensor):
-            v_colors = F.detach().cpu().numpy()
+            v_colors = v_colors.detach().cpu().numpy()
         assert(v_colors.shape[0]==V.shape[0])
         # 1D scalar for each face
         if v_colors.size == V.shape[0]:
