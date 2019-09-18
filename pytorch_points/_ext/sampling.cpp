@@ -1,76 +1,131 @@
 #include "utils.h"
 #include <torch/extension.h>
-#include <iostream>
+#include <torch/serialize/tensor.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <vector>
+#include <THC/THC.h>
+#include "interpolate_gpu.h"
 
 // CUDA forward declarations
+extern THCState *state;
 
-at::Tensor furthest_sampling_cuda_forward(
-    const int m, 
-    const int seedIdx,
-    at::Tensor input,
-    at::Tensor temp,
-    at::Tensor idx);
+void furthest_sampling_cuda_forward(const int m, const int seedIdx,
+  at::Tensor& input, at::Tensor& temp, at::Tensor& idx);
 
-at::Tensor gather_points_cuda_forward(int b, int c, int n, int npoints,
-                                      at::Tensor points, at::Tensor idx,
-                                      at::Tensor out);
+void gather_points_kernel_launcher_fast(int b, int c, int n, int npoints,
+    const float *points, const int *idx, float *out, cudaStream_t stream);
 
-at::Tensor gather_points_cuda_backward(int b, int c, int n, int npoints,
-                                       at::Tensor grad_out, at::Tensor idx, at::Tensor grad_points);
+void gather_points_grad_kernel_launcher_fast(int b, int c, int n, int npoints,
+    const float *grad_out, const int *idx, float *grad_points, cudaStream_t stream);
+
+
+int gather_points_wrapper_fast(int b, int c, int n, int npoints,
+    at::Tensor& points_tensor, at::Tensor& idx_tensor, at::Tensor& out_tensor){
+    const float *points = points_tensor.data<float>();
+    const int *idx = idx_tensor.data<int>();
+    float *out = out_tensor.data<float>();
+
+    cudaStream_t stream = THCState_getCurrentStream(state);
+    gather_points_kernel_launcher_fast(b, c, n, npoints, points, idx, out, stream);
+    return 1;
+}
+
+
+int gather_points_grad_wrapper_fast(int b, int c, int n, int npoints,
+    at::Tensor& grad_out_tensor, at::Tensor& idx_tensor, at::Tensor& grad_points_tensor) {
+
+    const float *grad_out = grad_out_tensor.data<float>();
+    const int *idx = idx_tensor.data<int>();
+    float *grad_points = grad_points_tensor.data<float>();
+
+    cudaStream_t stream = THCState_getCurrentStream(state);
+    gather_points_grad_kernel_launcher_fast(b, c, n, npoints, grad_out, idx, grad_points, stream);
+    return 1;
+}
+
+// at::Tensor gather_points_cuda_forward(int b, int c, int n, int npoints,
+//                                       at::Tensor points, at::Tensor idx,
+//                                       at::Tensor out);
+
+// at::Tensor gather_points_cuda_backward(int b, int c, int n, int npoints,
+//                                        at::Tensor grad_out, at::Tensor idx, at::Tensor grad_points);
+
+// at::Tensor gather_points_forward(int b, int c, int n, int npoints,
+//                                  at::Tensor points_tensor,
+//                                  at::Tensor idx_tensor,
+//                                  at::Tensor out_tensor)
+// {
+//   CHECK_INPUT(points_tensor);
+//   CHECK_INPUT(idx_tensor);
+//   return gather_points_cuda_forward(b, c, n, npoints, points_tensor, idx_tensor, out_tensor);
+// }
+
+// at::Tensor gather_points_backward(int b, int c, int n, int npoints,
+//                                   at::Tensor grad_out_tensor,
+//                                   at::Tensor idx_tensor,
+//                                   at::Tensor grad_points_tensor)
+// {
+//   return gather_points_cuda_backward(b, c, n, npoints, grad_out_tensor, idx_tensor, grad_points_tensor);
+// }
 
 at::Tensor furthest_sampling_forward(
   const int m,
   const int seedIdx,
-  at::Tensor input,
-  at::Tensor temp,
-  at::Tensor idx
+  at::Tensor& input,
+  at::Tensor& temp,
+  at::Tensor& idx
 )
 {
   CHECK_INPUT(input);
   CHECK_INPUT(temp);
-  return furthest_sampling_cuda_forward(m, seedIdx, input, temp, idx);
-}
-
-at::Tensor gather_points_forward(int b, int c, int n, int npoints,
-                                 at::Tensor points_tensor,
-                                 at::Tensor idx_tensor,
-                                 at::Tensor out_tensor)
-{
-  CHECK_INPUT(points_tensor);
-  CHECK_INPUT(idx_tensor);
-  return gather_points_cuda_forward(b, c, n, npoints, points_tensor, idx_tensor, out_tensor);
-}
-
-at::Tensor gather_points_backward(int b, int c, int n, int npoints,
-                                  at::Tensor grad_out_tensor,
-                                  at::Tensor idx_tensor,
-                                  at::Tensor grad_points_tensor)
-{
-  return gather_points_cuda_backward(b, c, n, npoints, grad_out_tensor, idx_tensor, grad_points_tensor);
-}
-
-at::Tensor ball_query_cuda_forward(float radius, int nsample, at::Tensor new_xyz,
-                                   at::Tensor xyz, at::Tensor out_idx);
-
-at::Tensor ball_query_forward(at::Tensor query, at::Tensor xyz, const float radius,
-                              const int nsample)
-{
-  CHECK_INPUT(query);
-  CHECK_INPUT(xyz);
-  CHECK_CUDA(xyz);
-  CHECK_CUDA(query);
-
-  at::Tensor idx =
-      torch::zeros({query.size(0), query.size(1), nsample},
-                   at::device(query.device()).dtype(at::ScalarType::Int));
-
-  if (query.type().is_cuda())
-  {
-    ball_query_cuda_forward(radius, nsample, query,
-                            xyz, idx);
-  }
+  furthest_sampling_cuda_forward(m, seedIdx, input, temp, idx);
   return idx;
 }
+
+void ball_query_kernel_launcher_fast(int b, int n, int m, float radius, int nsample,
+	const float *xyz, const float *new_xyz, int *idx, cudaStream_t stream);
+
+at::Tensor ball_query_wrapper_fast(at::Tensor& new_xyz_tensor, at::Tensor& xyz_tensor,
+      const float radius, const int nsample) {
+    CHECK_INPUT(new_xyz_tensor);
+    CHECK_INPUT(xyz_tensor);
+    CHECK_CUDA(new_xyz_tensor);
+    CHECK_CUDA(xyz_tensor);
+    const float *new_xyz = new_xyz_tensor.data<float>();
+    const float *xyz = xyz_tensor.data<float>();
+    at::Tensor idx_tensor = torch::zeros({new_xyz_tensor.size(0), new_xyz_tensor.size(1), nsample},
+                                  at::device(new_xyz_tensor.device()).dtype(at::ScalarType::Int));
+    int *idx = idx_tensor.data<int>();
+
+    const int b = new_xyz_tensor.size(0);
+    const int m = new_xyz_tensor.size(1);
+    const int n = xyz_tensor.size(1);
+
+    cudaStream_t stream = THCState_getCurrentStream(state);
+    ball_query_kernel_launcher_fast(b, n, m, radius, nsample, new_xyz, xyz, idx, stream);
+    return idx_tensor;
+}
+// at::Tensor ball_query_cuda_forward(float radius, int nsample, at::Tensor new_xyz,
+//                                    at::Tensor xyz, at::Tensor out_idx);
+// at::Tensor ball_query_forward(at::Tensor query, at::Tensor xyz, const float radius,
+//                               const int nsample)
+// {
+//   CHECK_INPUT(query);
+//   CHECK_INPUT(xyz);
+//   CHECK_CUDA(xyz);
+//   CHECK_CUDA(query);
+
+//   at::Tensor idx =
+//       torch::zeros({query.size(0), query.size(1), nsample},
+//                    at::device(query.device()).dtype(at::ScalarType::Int));
+
+//   if (query.type().is_cuda())
+//   {
+//     ball_query_cuda_forward(radius, nsample, query,
+//                             xyz, idx);
+//   }
+//   return idx;
+// }
 void group_points_kernel_wrapper(int b, int c, int n, int npoints, int nsample,
                                  const float *points, const int *idx,
                                  float *out);
@@ -98,7 +153,7 @@ at::Tensor group_points(at::Tensor points, at::Tensor idx) {
                                 idx.size(1), idx.size(2), points.data<float>(),
                                 idx.data<int>(), output.data<float>());
   } else {
-    AT_CHECK(false, "CPU not supported");
+    TORCH_CHECK(false, "CPU not supported");
   }
 
   return output;
@@ -123,17 +178,63 @@ at::Tensor group_points_grad(at::Tensor grad_out, at::Tensor idx, const int n) {
         grad_out.size(0), grad_out.size(1), n, idx.size(1), idx.size(2),
         grad_out.data<float>(), idx.data<int>(), output.data<float>());
   } else {
-    AT_CHECK(false, "CPU not supported");
+    TORCH_CHECK(false, "CPU not supported");
   }
 
   return output;
 }
+
+void three_nn_wrapper_fast(int b, int n, int m, at::Tensor unknown_tensor,
+    at::Tensor known_tensor, at::Tensor dist2_tensor, at::Tensor idx_tensor) {
+    const float *unknown = unknown_tensor.data<float>();
+    const float *known = known_tensor.data<float>();
+    float *dist2 = dist2_tensor.data<float>();
+    int *idx = idx_tensor.data<int>();
+
+    cudaStream_t stream = THCState_getCurrentStream(state);
+    three_nn_kernel_launcher_fast(b, n, m, unknown, known, dist2, idx, stream);
+}
+
+
+void three_interpolate_wrapper_fast(int b, int c, int m, int n,
+                         at::Tensor points_tensor,
+                         at::Tensor idx_tensor,
+                         at::Tensor weight_tensor,
+                         at::Tensor out_tensor) {
+
+    const float *points = points_tensor.data<float>();
+    const float *weight = weight_tensor.data<float>();
+    float *out = out_tensor.data<float>();
+    const int *idx = idx_tensor.data<int>();
+
+    cudaStream_t stream = THCState_getCurrentStream(state);
+    three_interpolate_kernel_launcher_fast(b, c, m, n, points, idx, weight, out, stream);
+}
+
+void three_interpolate_grad_wrapper_fast(int b, int c, int n, int m,
+                            at::Tensor grad_out_tensor,
+                            at::Tensor idx_tensor,
+                            at::Tensor weight_tensor,
+                            at::Tensor grad_points_tensor) {
+
+    const float *grad_out = grad_out_tensor.data<float>();
+    const float *weight = weight_tensor.data<float>();
+    float *grad_points = grad_points_tensor.data<float>();
+    const int *idx = idx_tensor.data<int>();
+
+    cudaStream_t stream = THCState_getCurrentStream(state);
+    three_interpolate_grad_kernel_launcher_fast(b, c, n, m, grad_out, idx, weight, grad_points, stream);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
   m.def("furthest_sampling", &furthest_sampling_forward, "furthest point sampling (no gradient)");
-  m.def("gather_forward", &gather_points_forward, "gather npoints points along an axis");
-  m.def("gather_backward", &gather_points_backward, "gather npoints points along an axis backward");
-  m.def("ball_query", &ball_query_forward, "ball query");
+  m.def("gather_forward", &gather_points_wrapper_fast, "gather npoints points along an axis");
+  m.def("gather_backward", &gather_points_grad_wrapper_fast, "gather npoints points along an axis backward");
+  m.def("ball_query", &ball_query_wrapper_fast, "ball query");
   m.def("group_points", &group_points);
   m.def("group_points_grad", &group_points_grad);
+  m.def("three_nn_wrapper", &three_nn_wrapper_fast, "three_nn_wrapper_fast");
+  m.def("three_interpolate_wrapper", &three_interpolate_wrapper_fast, "three_interpolate_wrapper_fast");
+  m.def("three_interpolate_grad_wrapper", &three_interpolate_grad_wrapper_fast, "three_interpolate_grad_wrapper_fast");
 }

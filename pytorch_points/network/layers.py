@@ -1,7 +1,22 @@
 import torch
 import torch.nn as nn
 from .operations import group_knn, furthest_point_sample, gather_points
+from typing import List
 
+
+class SharedMLP(nn.Sequential):
+    def __init__(self, args: List[int], activation: str = None, normalization: str = None, **kwargs):
+        super().__init__()
+
+        for i in range(len(args) - 1):
+            self.add_module(
+                'layer{}'.format(i),
+                Conv2d(
+                    args[i], args[i + 1], 1,
+                    normalization=normalization,
+                    activation=activation
+                )
+            )
 
 class DenseEdgeConv(nn.Module):
     """docstring for EdgeConv"""

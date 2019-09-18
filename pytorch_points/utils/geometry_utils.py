@@ -4,13 +4,17 @@ import openmesh as om
 import os
 from matplotlib import cm
 import torch
+from collections import abc
 
-def read_trimesh(filename, **kwargs):
+
+def read_trimesh(filename, return_mesh=False, **kwargs):
     """
     load vertices and faces of a mesh file
     return:
         V (N,3) floats
         F (F,3) int64
+        properties "vertex_colors" "face_colors" etc
+        mesh    trimesh object
     """
     try:
         mesh = om.read_trimesh(filename, **kwargs)
@@ -40,9 +44,12 @@ def read_trimesh(filename, **kwargs):
         f_colors = mesh.face_colors()
         properties["face_colors"] = f_colors
 
+    if return_mesh:
+        return V, F, properties, mesh
+
     return V, F, properties
 
-def write_trimesh(filename, V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name="Set1"):
+def write_trimesh(filename, V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name="Set1", **kwargs):
     """
     write a mesh with (N,3) vertices and (F,3) faces to file
     """
@@ -52,7 +59,7 @@ def write_trimesh(filename, V, F, v_colors=None, f_colors=None, v_normals=True, 
 
     mesh = array_to_mesh(V, F, v_colors=v_colors, f_colors=f_colors, v_normals=v_normals, cmap_name=cmap_name)
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    om.write_mesh(filename, mesh, vertex_color=mesh.has_vertex_colors())
+    om.write_mesh(filename, mesh, vertex_color=mesh.has_vertex_colors(), **kwargs)
 
 
 def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name="Set1"):
@@ -181,3 +188,192 @@ def edge_vertex_indices(F):
         edges = edges.reshape([-1, 2])
         edges = np.unique(edges, axis=0)
     return edges
+
+def get_edge_lengths(vertices, edge_points=None):
+    """
+    get edge length using edge_points from get_edge_points(mesh)
+    """
+    edge_lengths = torch.norm(vertices[edge_points[:, 0]] - mesh.vs[edge_points[:, 1]], ord=2, axis=1)
+    return edge_lengths
+
+class Mesh(abc.Mapping):
+    """
+    create mesh object from vertices and faces with attributes
+    ve:            List(List(int64)) vertex - edge idx
+    edges:         (E,2) int32 numpy array edges represented as sorted vertex indices
+    gemm_edges     (E,4) int64 numpy array indices of the four neighboring edges
+    ======
+    :param
+        vertices   (V,3) float32
+        faces      (F,3) int64
+    """
+    def __init__(self, filepath: str = None, vertices: torch.Tensor = None, faces: torch.Tensor = None):
+        if filepath is not None:
+            mesh = om.read_trimesh(filepath)
+            vertices = mesh.points()
+
+        face_lists = []
+        for f in mesh.face_vertex_indices():
+            face_lists.append(f)
+        faces = np.stack(face_lists, axis=0)
+
+        mesh.request_face_normals()
+        if not mesh.has_vertex_normals():
+            mesh.request_vertex_normals()
+            mesh.update_normals()
+        v_normals = mesh.vertex_normals()
+        f_normals = mesh.face_normals()
+        vertices = np.concatenate([vertices, v_normals], axis=-1)
+        faces = np.concatenate([faces, f_normals], axis=-1)
+
+        self.vs = vertices
+        self.fs = faces
+        build_gemm(self, faces)
+        features = []
+        edge_points = get_edge_points(self)
+
+
+        with np.errstate(divide='raise'):
+            try:
+                for extractor in [dihedral_angle, symmetric_opposite_angles, symmetric_ratios]:
+                    feature = extractor(mesh, edge_points)
+                    features.append(feature)
+                return np.concatenate(features, axis=0)
+            except Exception as e:
+                print(e)
+                raise ValueError(mesh.filename, 'bad features')
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __len__(self):
+        return len(self.keys())
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def funcname(parameter_list):
+        pass
+
+def compute_face_normals_and_areas(mesh, faces):
+    face_normals = torch.cross(mesh.vs[faces[:, 1]] - mesh.vs[faces[:, 0]],
+                            mesh.vs[faces[:, 2]] - mesh.vs[faces[:, 1]])
+    face_areas = torch.sqrt((face_normals ** 2).sum(dim=1))
+    face_normals /= face_areas.unsqueeze(-1)
+    assert (not np.any(face_areas.unsqueeze(-1) == 0)), 'has zero area face: %s' % mesh.filename
+    face_areas *= 0.5
+    return face_normals, face_areas
+
+
+def build_gemm(mesh, faces):
+    """
+    ve:            List(List(int64)) vertex - edge idx
+    edges:         (E,2) int32 numpy array edges represented as sorted vertex indices
+    gemm_edges     (E,4) int64 numpy array indices of the four neighboring edges
+    """
+    mesh.ve = [[] for _ in mesh.vs]
+    edge_nb = []
+    # sides = []
+    edge2key = dict()
+    edges = []
+    edges_count = 0
+    nb_count = []
+    for face_id, face in enumerate(faces):
+        faces_edges = []
+        for i in range(3):
+            cur_edge = (face[i], face[(i + 1) % 3])
+            faces_edges.append(cur_edge)
+        for idx, edge in enumerate(faces_edges):
+            edge = tuple(sorted(list(edge)))
+            faces_edges[idx] = edge
+            if edge not in edge2key:
+                edge2key[edge] = edges_count
+                edges.append(list(edge))
+                edge_nb.append([-1, -1, -1, -1])
+                # sides.append([-1, -1, -1, -1])
+                mesh.ve[edge[0]].append(edges_count)
+                mesh.ve[edge[1]].append(edges_count)
+                # mesh.edge_areas.append(0)
+                nb_count.append(0)
+                edges_count += 1
+            # mesh.edge_areas[edge2key[edge]] += face_areas[face_id] / 3
+        for idx, edge in enumerate(faces_edges):
+            edge_key = edge2key[edge]
+            edge_nb[edge_key][nb_count[edge_key]] = edge2key[faces_edges[(idx + 1) % 3]]
+            edge_nb[edge_key][nb_count[edge_key] + 1] = edge2key[faces_edges[(idx + 2) % 3]]
+            nb_count[edge_key] += 2
+        # for idx, edge in enumerate(faces_edges):
+        #     edge_key = edge2key[edge]
+        #     sides[edge_key][nb_count[edge_key] - 2] = nb_count[edge2key[faces_edges[(idx + 1) % 3]]] - 1
+        #     sides[edge_key][nb_count[edge_key] - 1] = nb_count[edge2key[faces_edges[(idx + 2) % 3]]] - 2
+    mesh.edges = np.array(edges, dtype=np.int32)
+    mesh.gemm_edges = np.array(edge_nb, dtype=np.int64)
+    # mesh.sides = np.array(sides, dtype=np.int64
+    mesh.edges_count = edges_count
+    # mesh.edge_areas = vertices(mesh.edge_areas, dtype=np.float32) / np.sum(face_areas) #todo whats the difference between edge_areas and edge_lengths?
+
+
+def get_edge_points(mesh):
+    """
+    get 4 edge points
+    """
+    edge_points = np.zeros([mesh.edges_count, 4], dtype=np.int32)
+    for edge_id, edge in enumerate(mesh.edges):
+        edge_points[edge_id] = get_side_points(mesh, edge_id)
+    return edge_points
+
+
+def get_side_points(mesh, edge_id):
+    """
+    return the four vertex indices around an edge
+       1
+    0 <|> 3
+       2
+    """
+    edge_a = mesh.edges[edge_id]
+
+    if mesh.gemm_edges[edge_id, 0] == -1:
+        edge_b = mesh.edges[mesh.gemm_edges[edge_id, 2]]
+        edge_c = mesh.edges[mesh.gemm_edges[edge_id, 3]]
+    else:
+        edge_b = mesh.edges[mesh.gemm_edges[edge_id, 0]]
+        edge_c = mesh.edges[mesh.gemm_edges[edge_id, 1]]
+    if mesh.gemm_edges[edge_id, 2] == -1:
+        edge_d = mesh.edges[mesh.gemm_edges[edge_id, 0]]
+        edge_e = mesh.edges[mesh.gemm_edges[edge_id, 1]]
+    else:
+        edge_d = mesh.edges[mesh.gemm_edges[edge_id, 2]]
+        edge_e = mesh.edges[mesh.gemm_edges[edge_id, 3]]
+    first_vertex = 0
+    second_vertex = 0
+    third_vertex = 0
+    if edge_a[1] in edge_b:
+        first_vertex = 1
+    if edge_b[1] in edge_c:
+        second_vertex = 1
+    if edge_d[1] in edge_e:
+        third_vertex = 1
+    return [edge_a[first_vertex], edge_a[1 - first_vertex], edge_b[second_vertex], edge_d[third_vertex]]
+
+
+def get_normals(mesh, edge_points, side):
+    """
+    return the face normal of 4 edge points on the specified side
+    """
+    edge_a = mesh.vs[edge_points[:, side // 2 + 2]] - mesh.vs[edge_points[:, side // 2]]
+    edge_b = mesh.vs[edge_points[:, 1 - side // 2]] - mesh.vs[edge_points[:, side // 2]]
+    normals = np.cross(edge_a, edge_b)
+    div = np.linalg.norm(normals, ord=2, axis=1)
+    normals /= (div[:, np.newaxis]+1e-5)
+    return normals
+
+
+def dihedral_angle(mesh, edge_points):
+    """
+    return the face-to-face angle of an edge specified by the 4 edge_points
+    """
+    normals_a = get_normals(mesh, edge_points, 0)
+    normals_b = get_normals(mesh, edge_points, 3)
+    dot = np.sum(normals_a * normals_b, axis=1).clip(-1, 1)
+    angles = np.expand_dims(np.pi - np.arccos(dot), axis=0)
+    return angles

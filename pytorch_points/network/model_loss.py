@@ -220,7 +220,13 @@ class MeshEdgeLengthLoss(torch.nn.Module):
 
 
 class MeshStretchLoss(torch.nn.Module):
-    """Penalize increase of edge length"""
+    """
+    Penalize increase of edge length max(len2/len1-1, 0)
+    Input:
+        vert1 reference vertices (B,N,3)
+        vert2 vertices (B,N,3)
+        faces face vertex indices (same between vert1 and vert2)
+    """
     def __init__(self, reduction="mean", consistent_topology=False):
         self.E = None
         self.reduction = reduction
@@ -257,7 +263,7 @@ class MeshStretchLoss(torch.nn.Module):
 
             edge_length1 = torch.sum(edge1*edge1, dim=-1)
             edge_length2 = torch.sum(edge2*edge2, dim=-1)
-            stretch = torch.max(edge_length2/edge_length2-1, torch.zeros_like(edge_length1))
+            stretch = torch.max(edge_length2/edge_length1-1, torch.zeros_like(edge_length1))
             if self.reduction in ("mean", "none"):
                 loss.append(stretch.mean())
             elif self.reduction == "max":

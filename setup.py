@@ -26,7 +26,9 @@ setup(
         ),
         CUDAExtension('sampling', [
             'pytorch_points/_ext/sampling.cpp',
-            'pytorch_points/_ext/sampling_cuda.cu', ],
+            'pytorch_points/_ext/sampling_cuda.cu',
+            'pytorch_points/_ext/interpolate_gpu.cu',
+            ],
             extra_compile_args={'cxx': ['-g'], 'nvcc': ['-O2']},
         )
     ],
