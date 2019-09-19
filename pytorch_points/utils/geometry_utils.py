@@ -1,3 +1,7 @@
+"""
+Courtesy to
+https://github.com/ranahanocka/MeshCNN/blob/master/models/layers/mesh_prepare.py
+"""
 import numpy as np
 import random
 import openmesh as om
@@ -165,37 +169,6 @@ def generatePolygon( ctrX, ctrY, aveRadius, irregularity, spikeyness, randRot, n
 
     return points
 
-
-def edge_vertex_indices(F):
-    """
-    Given F matrix of a triangle mesh return unique edge vertices of a mesh Ex2 tensor
-    params:
-        F (F,L) tensor or numpy
-    return:
-        E (E,2) tensor or numpy
-    """
-    if isinstance(F, torch.Tensor):
-        # F,L,2
-        edges = torch.stack([F, F[:,[1, 2, 0]]], dim=-1)
-        edges = torch.sort(edges, dim=-1)[0]
-        # FxL,2
-        edges = edges.reshape(-1, 2)
-        # E,2
-        edges = torch.unique(edges, dim=0)
-    else:
-        edges = np.stack([F, F[:,[1,2,0]]], axis=-1)
-        edges = np.sort(edges, axis=-1)
-        edges = edges.reshape([-1, 2])
-        edges = np.unique(edges, axis=0)
-    return edges
-
-def get_edge_lengths(vertices, edge_points=None):
-    """
-    get edge length using edge_points from get_edge_points(mesh)
-    """
-    edge_lengths = torch.norm(vertices[edge_points[:, 0]] - mesh.vs[edge_points[:, 1]], ord=2, axis=1)
-    return edge_lengths
-
 class Mesh(abc.Mapping):
     """
     create mesh object from vertices and faces with attributes
@@ -212,36 +185,17 @@ class Mesh(abc.Mapping):
             mesh = om.read_trimesh(filepath)
             vertices = mesh.points()
 
-        face_lists = []
-        for f in mesh.face_vertex_indices():
-            face_lists.append(f)
-        faces = np.stack(face_lists, axis=0)
-
-        mesh.request_face_normals()
-        if not mesh.has_vertex_normals():
-            mesh.request_vertex_normals()
-            mesh.update_normals()
-        v_normals = mesh.vertex_normals()
-        f_normals = mesh.face_normals()
-        vertices = np.concatenate([vertices, v_normals], axis=-1)
-        faces = np.concatenate([faces, f_normals], axis=-1)
+            face_lists = []
+            for f in mesh.face_vertex_indices():
+                face_lists.append(f)
+            faces = np.stack(face_lists, axis=0)
 
         self.vs = vertices
         self.fs = faces
+
         build_gemm(self, faces)
-        features = []
-        edge_points = get_edge_points(self)
 
-
-        with np.errstate(divide='raise'):
-            try:
-                for extractor in [dihedral_angle, symmetric_opposite_angles, symmetric_ratios]:
-                    feature = extractor(mesh, edge_points)
-                    features.append(feature)
-                return np.concatenate(features, axis=0)
-            except Exception as e:
-                print(e)
-                raise ValueError(mesh.filename, 'bad features')
+        self.edge_points = torch.from_numpy(get_edge_points(self))
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -251,18 +205,6 @@ class Mesh(abc.Mapping):
 
     def __iter__(self):
         return iter(self.keys())
-
-    def funcname(parameter_list):
-        pass
-
-def compute_face_normals_and_areas(mesh, faces):
-    face_normals = torch.cross(mesh.vs[faces[:, 1]] - mesh.vs[faces[:, 0]],
-                            mesh.vs[faces[:, 2]] - mesh.vs[faces[:, 1]])
-    face_areas = torch.sqrt((face_normals ** 2).sum(dim=1))
-    face_normals /= face_areas.unsqueeze(-1)
-    assert (not np.any(face_areas.unsqueeze(-1) == 0)), 'has zero area face: %s' % mesh.filename
-    face_areas *= 0.5
-    return face_normals, face_areas
 
 
 def build_gemm(mesh, faces):
@@ -299,7 +241,7 @@ def build_gemm(mesh, faces):
             # mesh.edge_areas[edge2key[edge]] += face_areas[face_id] / 3
         for idx, edge in enumerate(faces_edges):
             edge_key = edge2key[edge]
-            edge_nb[edge_key][nb_count[edge_key]] = edge2key[faces_edges[(idx + 1) % 3]]
+            edge_nb[edge_key][nb_count[edge_key]]     = edge2key[faces_edges[(idx + 1) % 3]]
             edge_nb[edge_key][nb_count[edge_key] + 1] = edge2key[faces_edges[(idx + 2) % 3]]
             nb_count[edge_key] += 2
         # for idx, edge in enumerate(faces_edges):
@@ -326,9 +268,14 @@ def get_edge_points(mesh):
 def get_side_points(mesh, edge_id):
     """
     return the four vertex indices around an edge
-       1
-    0 <|> 3
-       2
+         1
+    e/d /|\ c
+       / | \
+    3 /  |a \ 2
+      \  |  /
+       \ | /
+    d/e \|/ b
+         0
     """
     edge_a = mesh.edges[edge_id]
 
@@ -356,24 +303,3 @@ def get_side_points(mesh, edge_id):
     return [edge_a[first_vertex], edge_a[1 - first_vertex], edge_b[second_vertex], edge_d[third_vertex]]
 
 
-def get_normals(mesh, edge_points, side):
-    """
-    return the face normal of 4 edge points on the specified side
-    """
-    edge_a = mesh.vs[edge_points[:, side // 2 + 2]] - mesh.vs[edge_points[:, side // 2]]
-    edge_b = mesh.vs[edge_points[:, 1 - side // 2]] - mesh.vs[edge_points[:, side // 2]]
-    normals = np.cross(edge_a, edge_b)
-    div = np.linalg.norm(normals, ord=2, axis=1)
-    normals /= (div[:, np.newaxis]+1e-5)
-    return normals
-
-
-def dihedral_angle(mesh, edge_points):
-    """
-    return the face-to-face angle of an edge specified by the 4 edge_points
-    """
-    normals_a = get_normals(mesh, edge_points, 0)
-    normals_b = get_normals(mesh, edge_points, 3)
-    dot = np.sum(normals_a * normals_b, axis=1).clip(-1, 1)
-    angles = np.expand_dims(np.pi - np.arccos(dot), axis=0)
-    return angles
