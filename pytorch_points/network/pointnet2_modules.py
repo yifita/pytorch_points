@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from . import pointnet2_utils
-from .operations import furthest_point_sample, gather_points, QueryAndGroup
+from .operations import gather_points, QueryAndGroup
+from .geo_operations import furthest_point_sample
 from .layers import SharedMLP
 from typing import List
 

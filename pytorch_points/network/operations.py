@@ -11,11 +11,9 @@ from scipy import sparse
 from .._ext import sampling
 from .._ext import linalg
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
-# from torch_scatter import scatter_add
 
 if torch.cuda.is_available():
     from .faiss_setup import GPU_RES
-
 
 
 def channel_shuffle(x, groups=2):
@@ -497,37 +495,37 @@ def scatter_add(src, idx, dim, out_size=None, fill=0.0):
 
 
 if __name__ == '__main__':
-    from ..utils import pc_utils
-    cuda0 = torch.device('cuda:0')
-    pc = pc_utils.read_ply("/home/ywang/Documents/points/point-upsampling/3PU/prepare_data/polygonmesh_base/build/data_PPU_output/training/112/angel4_aligned_2.ply")
-    pc = pc[:, :3]
-    print("{} input points".format(pc.shape[0]))
-    pc_utils.save_ply(pc, "./input.ply", colors=None, normals=None)
-    pc = torch.from_numpy(pc).requires_grad_().to(cuda0).unsqueeze(0)
-    pc = pc.transpose(2, 1)
+    # from ..utils import pc_utils
+    # cuda0 = torch.device('cuda:0')
+    # pc = pc_utils.read_ply("/home/ywang/Documents/points/point-upsampling/3PU/prepare_data/polygonmesh_base/build/data_PPU_output/training/112/angel4_aligned_2.ply")
+    # pc = pc[:, :3]
+    # print("{} input points".format(pc.shape[0]))
+    # pc_utils.save_ply(pc, "./input.ply", colors=None, normals=None)
+    # pc = torch.from_numpy(pc).requires_grad_().to(cuda0).unsqueeze(0)
+    # pc = pc.transpose(2, 1)
 
-    # test furthest point
-    idx, sampled_pc = furthest_point_sample(pc, 1250)
-    output = sampled_pc.transpose(2, 1).cpu().squeeze()
-    pc_utils.save_ply(output.detach(), "./output.ply", colors=None, normals=None)
+    # # test furthest point
+    # idx, sampled_pc = furthest_point_sample(pc, 1250)
+    # output = sampled_pc.transpose(2, 1).cpu().squeeze()
+    # pc_utils.save_ply(output.detach(), "./output.ply", colors=None, normals=None)
 
-    # test KNN
-    knn_points, _, _ = group_knn(10, sampled_pc, pc, NCHW=True)  # B, C, M, K
-    labels = torch.arange(0, knn_points.size(2)).unsqueeze_(
-        0).unsqueeze_(0).unsqueeze_(-1)  # 1, 1, M, 1
-    labels = labels.expand(knn_points.size(0), -1, -1,
-                           knn_points.size(3))  # B, 1, M, K
-    # B, C, P
-    labels = torch.cat(torch.unbind(labels, dim=-1), dim=-1).squeeze().detach().cpu().numpy()
-    knn_points = torch.cat(torch.unbind(knn_points, dim=-1),
-                           dim=-1).transpose(2, 1).squeeze(0).detach().cpu().numpy()
-    pc_utils.save_ply_property(knn_points, labels, "./knn_output.ply", cmap_name='jet')
+    # # test KNN
+    # knn_points, _, _ = group_knn(10, sampled_pc, pc, NCHW=True)  # B, C, M, K
+    # labels = torch.arange(0, knn_points.size(2)).unsqueeze_(
+    #     0).unsqueeze_(0).unsqueeze_(-1)  # 1, 1, M, 1
+    # labels = labels.expand(knn_points.size(0), -1, -1,
+    #                        knn_points.size(3))  # B, 1, M, K
+    # # B, C, P
+    # labels = torch.cat(torch.unbind(labels, dim=-1), dim=-1).squeeze().detach().cpu().numpy()
+    # knn_points = torch.cat(torch.unbind(knn_points, dim=-1),
+    #                        dim=-1).transpose(2, 1).squeeze(0).detach().cpu().numpy()
+    # pc_utils.save_ply_property(knn_points, labels, "./knn_output.ply", cmap_name='jet')
 
-    from torch.autograd import gradcheck
-    # test = gradcheck(furthest_point_sample, [pc, 1250], eps=1e-6, atol=1e-4)
+    # from torch.autograd import gradcheck
+    # # test = gradcheck(furthest_point_sample, [pc, 1250], eps=1e-6, atol=1e-4)
+    # # print(test)
+    # test = gradcheck(gather_points, [pc.to(  # type: ignore
+    #     dtype=torch.float64), idx], eps=1e-6, atol=1e-4)
+
     # print(test)
-    test = gradcheck(gather_points, [pc.to(  # type: ignore
-        dtype=torch.float64), idx], eps=1e-6, atol=1e-4)
-
-    print(test)
-
+    pass

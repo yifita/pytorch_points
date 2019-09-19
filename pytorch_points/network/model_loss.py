@@ -1,28 +1,28 @@
 import torch
 import numpy as np
 from .._ext import losses
-from . import operations
-from ..utils.pytorch_utils import save_grad
-from ..utils.geometry_utils import edge_vertex_indices
+from ..utils.pytorch_utils  import save_grad
+from .operations import faiss_knn
+from . import geo_operations as geo_op
 
-class MeshLaplacianLoss_old(torch.nn.Module):
-    """
-    compare uniform laplacian of two meshes assuming known correspondence
-    num_point: number of vertices
-    faces: (B,F,L) face indices
-    metric: an instance of a module e.g. L1Loss
-    """
-    def __init__(self, num_point, faces, metric):
-        super().__init__()
-        self.laplacian1 = operations.UniformLaplacian()
-        self.laplacian2 = operations.UniformLaplacian()
-        self.metric = metric
-        self.faces = faces
+# class MeshLaplacianLoss_old(torch.nn.Module):
+#     """
+#     compare uniform laplacian of two meshes assuming known correspondence
+#     num_point: number of vertices
+#     faces: (B,F,L) face indices
+#     metric: an instance of a module e.g. L1Loss
+#     """
+#     def __init__(self, num_point, faces, metric):
+#         super().__init__()
+#         self.laplacian1 = geo_op.UniformLaplacian()
+#         self.laplacian2 = geo_op.UniformLaplacian()
+#         self.metric = metric
+#         self.faces = faces
 
-    def forward(self, vert1, vert2):
-        lap1 = self.laplacian1(vert1, self.faces)
-        lap2 = self.laplacian2(vert2, self.faces)
-        return self.metric(lap1, lap2)
+#     def forward(self, vert1, vert2):
+#         lap1 = self.laplacian1(vert1, self.faces)
+#         lap2 = self.laplacian2(vert2, self.faces)
+#         return self.metric(lap1, lap2)
 
 
 class UniformLaplacianSmoothnessLoss(torch.nn.Module):
@@ -31,7 +31,7 @@ class UniformLaplacianSmoothnessLoss(torch.nn.Module):
     """
     def __init__(self, num_point, faces, metric):
         super().__init__()
-        self.laplacian = operations.UniformLaplacian()
+        self.laplacian = geo_op.UniformLaplacian()
         self.metric = metric
         self.faces = faces
 
@@ -56,9 +56,9 @@ class MeshLaplacianLoss(torch.nn.Module):
     def __init__(self, metric, use_cot=False, use_norm=False, consistent_topology=False):
         super().__init__()
         if use_cot:
-            self.laplacian = operations.CotLaplacian()
+            self.laplacian = geo_op.CotLaplacian()
         else:
-            self.laplacian = operations.UniformLaplacian()
+            self.laplacian = geo_op.UniformLaplacian()
 
         self.use_norm = use_norm
         self.consistent_topology = consistent_topology
@@ -95,8 +95,8 @@ class PointLaplacianLoss(torch.nn.Module):
         point1: (B,N,D) ref points (where connectivity is computed)
         point2: (B,N,D) pred points, uses connectivity of point1
         """
-        lap1, knn_idx = operations.pointUniformLaplacian(point1, nn_size=self.nn_size)
-        lap2, _ = operations.pointUniformLaplacian(point2, knn_idx=knn_idx)
+        lap1, knn_idx = geo_op.pointUniformLaplacian(point1, nn_size=self.nn_size)
+        lap2, _ = geo_op.pointUniformLaplacian(point2, knn_idx=knn_idx)
         if self.use_norm:
             lap1 = torch.norm(lap1, dim=-1, p=2)
             lap2 = torch.norm(lap2, dim=-1, p=2)
@@ -119,7 +119,7 @@ class PointEdgeLengthLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K)
-        group_points, knn_idx, _ = operations.faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
+        group_points, knn_idx, _ = faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
         group_points= group_points[:,:,1:,:]
         dist_ref = torch.norm(group_points - points_ref.unsqueeze(2), dim=-1, p=2)
@@ -146,7 +146,7 @@ class PointStretchLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K), (B,N,K)
-        group_points_ref, knn_idx, _ = operations.faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
+        group_points_ref, knn_idx, _ = faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
         knn_idx = knn_idx[:, :, 1:]
         group_points_ref = group_points_ref[:,:,1:,:]
         dist_ref = torch.norm(group_points_ref - points_ref.unsqueeze(2), dim=-1, p=2)
@@ -163,7 +163,6 @@ class PointStretchLoss(torch.nn.Module):
             return torch.mean(torch.max(stretch, dim=-1)[0])
         else:
             raise NotImplementedError
-
 
 
 class MeshEdgeLengthLoss(torch.nn.Module):
@@ -183,7 +182,7 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         B, F, _ = faces.shape
         EV = []
         for b in range(B):
-            EV.append(edge_vertex_indices(faces[b]))
+            EV.append(geo_op.edge_vertex_indices(faces[b]))
         return EV
 
     def forward(self, vert1, vert2, face=None):
@@ -202,15 +201,8 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         # (B, E, 2, 3)
         loss = []
         for b in range(B):
-            # (P,3) (Ex2) -> (Ex2,3)
-            edge1 = torch.gather(vert1[b], 0, self.E[b].view(-1, 1).expand(-1, vert1.shape[-1])).view(-1, 2, vert1.shape[-1])
-            edge2 = torch.gather(vert2[b], 0, self.E[b].view(-1, 1).expand(-1, vert2.shape[-1])).view(-1, 2, vert2.shape[-1])
-
-            edge1 = edge1[:,0,:]-edge1[:,1,:]
-            edge2 = edge2[:,0,:]-edge2[:,1,:]
-
-            edge_length1 = torch.sum(edge1*edge1, dim=-1)
-            edge_length2 = torch.sum(edge2*edge2, dim=-1)
+            edge_length1 = geo_op.get_edge_lengths(vert1[b], self.E[b])
+            edge_length1 = geo_op.get_edge_lengths(vert2[b], self.E[b])
             loss.append(self.metric(edge_length1, edge_length2))
 
         loss = torch.stack(loss, dim=0)
@@ -222,6 +214,8 @@ class MeshEdgeLengthLoss(torch.nn.Module):
 class MeshStretchLoss(torch.nn.Module):
     """
     Penalize increase of edge length max(len2/len1-1, 0)
+    assuming the same triangulation
+    ======
     Input:
         vert1 reference vertices (B,N,3)
         vert2 vertices (B,N,3)
@@ -240,7 +234,7 @@ class MeshStretchLoss(torch.nn.Module):
         B, F, _ = faces.shape
         EV = []
         for b in range(B):
-            EV.append(edge_vertex_indices(faces[b]))
+            EV.append(geo_op.edge_vertex_indices(faces[b]))
         return EV
 
     def forward(self, vert1, vert2, face=None):
@@ -254,15 +248,9 @@ class MeshStretchLoss(torch.nn.Module):
         # (B, E, 2, 3)
         loss = []
         for b in range(B):
-            # (P,3) (Ex2) -> (Ex2,3)
-            edge1 = torch.gather(vert1[b], 0, self.E[b].view(-1, 1).expand(-1, vert1.shape[-1])).view(-1, 2, vert1.shape[-1])
-            edge2 = torch.gather(vert2[b], 0, self.E[b].view(-1, 1).expand(-1, vert2.shape[-1])).view(-1, 2, vert2.shape[-1])
+            edge_length1 = geo_op.get_edge_lengths(vert1[b], self.E[b])
+            edge_length2 = geo_op.get_edge_lengths(vert2[b], self.E[b])
 
-            edge1 = edge1[:,0,:]-edge1[:,1,:]
-            edge2 = edge2[:,0,:]-edge2[:,1,:]
-
-            edge_length1 = torch.sum(edge1*edge1, dim=-1)
-            edge_length2 = torch.sum(edge2*edge2, dim=-1)
             stretch = torch.max(edge_length2/edge_length1-1, torch.zeros_like(edge_length1))
             if self.reduction in ("mean", "none"):
                 loss.append(stretch.mean())
@@ -278,7 +266,6 @@ class MeshStretchLoss(torch.nn.Module):
             loss = loss.mean()
 
         return loss
-
 
 
 class SimpleMeshRepulsionLoss(MeshStretchLoss):
@@ -303,10 +290,7 @@ class SimpleMeshRepulsionLoss(MeshStretchLoss):
         # (B, E, 2, 3)
         loss = []
         for b in range(B):
-            # (P,3) (Ex2) -> (Ex2,3)
-            edge1 = torch.gather(verts1[b], 0, self.E[b].view(-1, 1).expand(-1, verts1.shape[-1])).view(-1, 2, verts1.shape[-1])
-            edge1 = edge1[:,0,:]-edge1[:,1,:]
-            edge_length1 = torch.sum(edge1*edge1, dim=-1)
+            edge_length1 = geo_op.get_edge_lengths(verts[b], self.E[b])
             tmp = 1/(edge_length1+1e-6)
             tmp = torch.where(edge_length1 < self.threshold2, tmp, torch.zeros_like(tmp))
             if self.reduction in ("mean", "none"):
@@ -318,6 +302,35 @@ class SimpleMeshRepulsionLoss(MeshStretchLoss):
             else:
                 raise NotImplementedError
             loss.append(tmp)
+
+        loss = torch.stack(loss, dim=0)
+        if self.reduction != "none":
+            loss = loss.mean()
+
+        return loss
+
+
+class MeshDihedralAngleLoss(torch.nn.Module):
+    """
+    vert1           (B,N,3)
+    vert2           (B,N,3)
+    edge_points     List(torch.Tensor(E, 4))
+    """
+    def __init__(self, metric: torch.nn.Module, consistent_topology: bool=False):
+        super().__init__()
+        self.metric = metric
+        self.consistent_topology = consistent_topology
+        # List(Ex4)
+        self.edge_points = None
+
+    def forward(self, vert1, vert2, edge_points):
+        B = vert1[0]
+        loss = []
+        for b in range(B):
+            angles1 = geo_op.dihedral_angle(vert1[b], edge_points[b])
+            angles2 = geo_op.dihedral_angle(vert2[b], edge_points[b])
+            tmp = self.metric(angles1, angles2)
+            tmp.append(loss)
 
         loss = torch.stack(loss, dim=0)
         if self.reduction != "none":
@@ -347,8 +360,8 @@ class NormalLoss(torch.nn.Module):
         self.metric = metric
 
     def forward(self, pred, gt):
-        pred_normals = operations.batch_normals(pred, nn_size=10, NCHW=True)
-        gt_normals = operations.batch_normals(gt, nn_size=10, NCHW=True)
+        pred_normals = geo_op.batch_normals(pred, nn_size=10, NCHW=True)
+        gt_normals = geo_op.batch_normals(gt, nn_size=10, NCHW=True)
         # compare the normal with the closest point
         return self.metric(pred_normals, gt_normals)
 
@@ -369,7 +382,7 @@ class SimplePointRepulsionLoss(torch.nn.Module):
     def forward(self, points, knn_idx=None):
         batchSize, PN, _ = points.shape
         if knn_idx is None:
-            knn_points, knn_idx, distance2 = operations.faiss_knn(self.nn_size+1, points, points, NCHW=False)
+            knn_points, knn_idx, distance2 = faiss_knn(self.nn_size+1, points, points, NCHW=False)
             knn_points = knn_points[:, :, 1:, :].contiguous().detach()
             knn_idx = knn_idx[:, :, 1:].contiguous()
         else:
@@ -474,7 +487,7 @@ class ChamferLoss(torch.nn.Module):
         if self.percentage < 1.0:
             pred_center = torch.mean(pred, dim=1, keepdim=True)
             num_point = pred.size(1)
-            pred, _, _ = operations.faiss_knn(int(self.percentage * num_point), pred_center, pred, unique=False, NCHW=False)
+            pred, _, _ = faiss_knn(int(self.percentage * num_point), pred_center, pred, unique=False, NCHW=False)
             pred = torch.squeeze(pred, dim=1)
             # # BxN
             # dist_sqr = torch.sum((pred - pred_center)**2, dim=-1)
@@ -486,7 +499,7 @@ class ChamferLoss(torch.nn.Module):
 
             gt_center = torch.mean(gt, dim=1, keepdim=True)
             num_point = gt.size(1)
-            gt, _, _ = operations.faiss_knn(int(self.percentage * num_point), gt_center, gt, unique=False, NCHW=False)
+            gt, _, _ = faiss_knn(int(self.percentage * num_point), gt_center, gt, unique=False, NCHW=False)
             gt = torch.squeeze(gt, dim=1)
             # # BxN
             # dist_sqr = torch.sum((label - label_center)**2, dim=-1)
@@ -538,7 +551,7 @@ class ChamferLoss(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    from .operations import normalize_point_batch
+    from .geo_operations import normalize_point_batch
     from ..utils.geometry_utils import array_to_mesh, write_trimesh, generatePolygon
     # pc1 = torch.randn([2, 600, 2], dtype=torch.float32,
     #                   requires_grad=True).cuda()

@@ -1,5 +1,8 @@
 import torch
-from .operations import batch_svd, normalize, dot_product
+from .._ext import sampling
+from .._ext import linalg
+from ..utils.pytorch_utils import check_values, save_grad, saved_variables
+from .operations import batch_svd, normalize, dot_product, scatter_add
 
 PI = 3.1415927
 
@@ -59,7 +62,7 @@ def furthest_point_sample(xyz, npoint, NCHW=True, seedIdx=0):
     return idx, sampled_pc
 
 
-def normalize_point_batch(pc, NCHW=True):
+def normalize_point_batch(pc: torch.Tensor, NCHW=True):
     """
     normalize a batch of point clouds
     :param
@@ -526,6 +529,7 @@ def compute_face_normals_and_areas(vertices: torch.Tensor, faces: torch.Tensor):
         face_normals         (B,F,3)
         squared_face_areas   (B,F)
     """
+    ndim = vertices.ndimension()
     if vertices.ndimension() == 2 and faces.ndimension() == 2:
         vertices.unsqueeze_(0)
         faces.unsqueeze_(0)
@@ -539,6 +543,11 @@ def compute_face_normals_and_areas(vertices: torch.Tensor, faces: torch.Tensor):
     face_areas = face_normals.clone()
     face_areas /= 4
     face_normals = normalize(face_normals, dim=-1)
+    if ndim == 2:
+        vertices.squeeze_(0)
+        faces.squeeze_(0)
+        face_normals.squeeze_(0)
+        face_areas.squeeze_(0)
     # assert (not np.any(face_areas.unsqueeze(-1) == 0)), 'has zero area face: %s' % mesh.filename
     return face_normals, face_areas
 
@@ -569,7 +578,7 @@ def edge_vertex_indices(F):
 
 def get_edge_lengths(vertices, edge_points):
     """
-    get edge squared length using edge_points from get_edge_points(mesh)
+    get edge squared length using edge_points from get_edge_points(mesh) or edge_vertex_indices(faces)
     :params
         vertices        (N,3)
         edge_points     (E,4)

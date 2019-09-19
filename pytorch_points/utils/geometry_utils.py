@@ -9,6 +9,7 @@ import os
 from matplotlib import cm
 import torch
 from collections import abc
+from ..network.geo_operations import compute_face_normals_and_areas
 
 
 def read_trimesh(filename, return_mesh=False, **kwargs):
@@ -174,37 +175,47 @@ class Mesh(abc.Mapping):
     create mesh object from vertices and faces with attributes
     ve:            List(List(int64)) vertex - edge idx
     edges:         (E,2) int32 numpy array edges represented as sorted vertex indices
-    gemm_edges     (E,4) int64 numpy array indices of the four neighboring edges
+    gemm_edges:     (E,4) int64 numpy array indices of the four neighboring edges
     ======
     :param
         vertices   (V,3) float32
         faces      (F,3) int64
     """
     def __init__(self, filepath: str = None, vertices: torch.Tensor = None, faces: torch.Tensor = None):
+        self.vs = vertices
+        self.fs = faces
+        self.vn = None
+        self.fn = None
+
         if filepath is not None:
             mesh = om.read_trimesh(filepath)
-            vertices = mesh.points()
+            self.vs = torch.from_numpy(mesh.points()).to(dtype=torch.float32)
 
             face_lists = []
             for f in mesh.face_vertex_indices():
                 face_lists.append(f)
-            faces = np.stack(face_lists, axis=0)
+            self.fs = torch.from_numpy(np.stack(face_lists, axis=0)).to(dtype=torch.int64)
+            mesh.request_face_normals()
+            if not mesh.has_vertex_normals():
+                mesh.request_vertex_normals()
+                mesh.update_normals()
+            v_normals = mesh.vertex_normals()
+            f_normals = mesh.face_normals()
+            self.vn = torch.from_numpy(v_normals.astype(np.float32))
+            self.fn = torch.from_numpy(f_normals.astype(np.float32))
 
-        self.vs = vertices
-        self.fs = faces
-
-        build_gemm(self, faces)
-
-        self.edge_points = torch.from_numpy(get_edge_points(self))
+        # build_gemm(self, self.fs)
+        self.farea = compute_face_normals_and_areas(self.vs, self.fs)
+        self.features = ['vs', 'fs', 'vn', 'fn', 'farea']
 
     def __getitem__(self, key):
         return getattr(self, key)
 
     def __len__(self):
-        return len(self.keys())
+        return len(self.features)
 
     def __iter__(self):
-        return iter(self.keys())
+        return iter(self.features)
 
 
 def build_gemm(mesh, faces):

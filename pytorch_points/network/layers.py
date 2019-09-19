@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from .operations import group_knn, furthest_point_sample, gather_points
+from .operations import group_knn, gather_points
+from .geo_operations import furthest_point_sample
 from typing import List
 
 
