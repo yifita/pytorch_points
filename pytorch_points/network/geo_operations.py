@@ -607,6 +607,8 @@ def get_normals(vertices: torch.Tensor, edge_points: torch.Tensor, side: int):
     edge_b = vertices[edge_points[:, 1 - side // 2]] - vertices[edge_points[:, side // 2]]
     normals = torch.cross(edge_a, edge_b, dim=-1)
     normals = normalize(normals, dim=-1)
+    if not check_values:
+        import pdb; pdb.set_trace()
     return normals
 
 
@@ -622,6 +624,6 @@ def dihedral_angle(vertices: torch.Tensor, edge_points: torch.Tensor):
     """
     normals_a = get_normals(vertices, edge_points, 0)
     normals_b = get_normals(vertices, edge_points, 3)
-    dot = dot_product(normals_a, normals_b, dim=-1).clip(-1, 1)
+    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1, 1)
     angles = PI - torch.acos(dot)
     return angles

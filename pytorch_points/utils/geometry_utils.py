@@ -224,6 +224,8 @@ def build_gemm(mesh, faces):
     edges:         (E,2) int32 numpy array edges represented as sorted vertex indices
     gemm_edges     (E,4) int64 numpy array indices of the four neighboring edges
     """
+    if isinstance(faces, torch.Tensor):
+        faces = faces.cpu().numpy()
     mesh.ve = [[] for _ in mesh.vs]
     edge_nb = []
     # sides = []
@@ -270,7 +272,7 @@ def get_edge_points(mesh):
     """
     get 4 edge points
     """
-    edge_points = np.zeros([mesh.edges_count, 4], dtype=np.int32)
+    edge_points = np.zeros([mesh.edges_count, 4], dtype=np.int64)
     for edge_id, edge in enumerate(mesh.edges):
         edge_points[edge_id] = get_side_points(mesh, edge_id)
     return edge_points
@@ -312,5 +314,3 @@ def get_side_points(mesh, edge_id):
     if edge_d[1] in edge_e:
         third_vertex = 1
     return [edge_a[first_vertex], edge_a[1 - first_vertex], edge_b[second_vertex], edge_d[third_vertex]]
-
-
