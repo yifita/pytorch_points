@@ -5,25 +5,6 @@ from ..utils.pytorch_utils  import save_grad
 from .operations import faiss_knn
 from . import geo_operations as geo_op
 
-# class MeshLaplacianLoss_old(torch.nn.Module):
-#     """
-#     compare uniform laplacian of two meshes assuming known correspondence
-#     num_point: number of vertices
-#     faces: (B,F,L) face indices
-#     metric: an instance of a module e.g. L1Loss
-#     """
-#     def __init__(self, num_point, faces, metric):
-#         super().__init__()
-#         self.laplacian1 = geo_op.UniformLaplacian()
-#         self.laplacian2 = geo_op.UniformLaplacian()
-#         self.metric = metric
-#         self.faces = faces
-
-#     def forward(self, vert1, vert2):
-#         lap1 = self.laplacian1(vert1, self.faces)
-#         lap2 = self.laplacian2(vert2, self.faces)
-#         return self.metric(lap1, lap2)
-
 
 class UniformLaplacianSmoothnessLoss(torch.nn.Module):
     """
@@ -442,6 +423,31 @@ class NmDistanceFunction(torch.autograd.Function):
 
 
 nndistance = NmDistanceFunction.apply  # type: ignore
+
+
+class LabeledNmdistanceFunction(NmDistanceFunction):
+    @staticmethod
+    def forward(ctx, xyz1, xyz2, label1, label2):
+        batchsize, n, _ = xyz1.size()
+        _, m, _ = xyz2.size()
+        assert(xyz1.dtype==xyz2.dtype)
+        label1 = label1.to(dtype=xyz1.dtype)
+        label2 = label2.to(dtype=xyz1.dtype)
+        dist1 = torch.zeros(batchsize, n, dtype=xyz1.dtype)
+        dist2 = torch.zeros(batchsize, m, dtype=xyz1.dtype)
+
+        idx1 = torch.zeros(batchsize, n).type(torch.IntTensor)
+        idx2 = torch.zeros(batchsize, m).type(torch.IntTensor)
+
+        dist1 = dist1.cuda()
+        dist2 = dist2.cuda()
+        idx1 = idx1.cuda()
+        idx2 = idx2.cuda()
+        losses.labeled_nmdistance_forward(xyz1, xyz2, label1, label2,  dist1, dist2, idx1, idx2)
+        ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
+        return dist1, dist2
+
+labeled_nndistance = LabeledNmdistanceFunction.apply
 
 class ChamferLoss(torch.nn.Module):
     """
