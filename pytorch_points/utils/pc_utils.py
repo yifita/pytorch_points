@@ -11,7 +11,7 @@ import plyfile
 
 def normalize_point_cloud(input):
     """
-    input: pc [N, P, 3]
+    input: pc [N, P, dim] or [P, dim]
     output: pc, centroid, furthest_distance
     """
     if len(input.shape) == 2:

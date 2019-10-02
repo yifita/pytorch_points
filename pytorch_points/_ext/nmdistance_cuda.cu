@@ -53,8 +53,8 @@ __global__ void NmDistanceKernel(int b,int n,int c,const scalar_t * xyz,int m,co
 // label  (b,n,1)
 // label2 (b,m,1)
 template <typename scalar_t>
-__global__ void LabeledNmDistanceKernel(int b,int n,int c, const scalar_t * xyz, int m, const scalar_t *label,
-								 		const scalar_t * xyz2, const scalar_t *label2,
+__global__ void LabeledNmDistanceKernel(int b,int n,int c, const scalar_t * xyz, const scalar_t *label,
+										int m, const scalar_t * xyz2, const scalar_t *label2,
 								 		scalar_t * result, int * result_i){
 	// const int BATCH=512;
 	extern __shared__ __align__(sizeof(scalar_t)) unsigned char my_smem[];
@@ -66,26 +66,26 @@ __global__ void LabeledNmDistanceKernel(int b,int n,int c, const scalar_t * xyz,
 		// 	1. sequentially fill shared buffer with xyz2 (into first BATCH*c) and label2 (into BATCH*1)
 		//  2. for each point in xyz1, find NN from the buffer
 		for (int k2=0;k2<m;k2+=BATCH){
+			// idx of the last point in xyz2 to fill the batch
 			int end_k=min(m,k2+BATCH)-k2;
-			int begin_of_label = end_k*c;
+			int begin_of_label = BATCH*c;
 			for (int j=threadIdx.x;j<end_k*c;j+=blockDim.x){
 				buf[j]=xyz2[(i*m+k2)*c+j];
 			}
-			for (int j=end_k*c;j<end_k*(c+1);j+=blockDim.x){
-				buf[j]=label2[(i*m+k2)+j];
+			for (int j=threadIdx.x;j<end_k;j+=blockDim.x){
+				buf[j+begin_of_label]=label2[(i*m+k2)+j];
 			}
 			__syncthreads();
 			// loop over current BATCH in xyz1
 			for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
+				const scalar_t l1 = label[(i*n+j)];
 				int best_i=-1;
-				// changed: initialize with a very large number
+				// TODO initialize with max scalar_t
 				scalar_t best=scalar_t(1e10);
 				// int end_ka=end_k-(end_k&3);
 				for (int k=0;k<end_k;k++){
-					scalar_t l2 = buf[begin_of_label+k];
-					const scalar_t l1 = label[(i*n+j)];
-					// TODO: max value in scalar_t
-					// scalar_t d = scalar_t(1e10);
+					const scalar_t l2 = buf[begin_of_label+k];
+					// const scalar_t l2 = label2[(i*m+k+k2)];
 					if (l1 == l2) {
 						scalar_t d = 0;
 						for (int _c = 0; _c < c; _c++){
@@ -104,6 +104,12 @@ __global__ void LabeledNmDistanceKernel(int b,int n,int c, const scalar_t * xyz,
 				}
 			}
 			__syncthreads();
+		}
+		// after processing all xyz2 and xyz1 for this batch
+		// go over result_i of xyz1, check if index = 0, change distance to 0
+		for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
+			if (result_i[((i*n+j))] < 0)
+				result[(i*n+j)] = 0;
 		}
 	}
 }
@@ -144,10 +150,10 @@ int labeled_chamfer_cuda_forward(const at::Tensor& xyz1, const at::Tensor& xyz2,
 	CHECK_EQ(xyz2.size(2), c);
 	AT_DISPATCH_FLOATING_TYPES_AND_HALF(
 		xyz1.scalar_type(), "NmDistanceKernel", ([&] {
-			LabeledNmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*(c+1)*sizeof(scalar_t)>>>(batch_size, n, c, xyz1.data<scalar_t>(), m, label1.toType(xyz1.scalar_type()).data<scalar_t>(),
+			LabeledNmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*(c+1)*sizeof(scalar_t)>>>(batch_size, n, c, xyz1.data<scalar_t>(), label1.toType(xyz1.scalar_type()).data<scalar_t>(), m,
 																								 xyz2.data<scalar_t>(), label2.toType(xyz1.scalar_type()).data<scalar_t>(), dist1.data<scalar_t>(), idx1.data<int>());
-			LabeledNmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*(c+1)*sizeof(scalar_t)>>>(batch_size, m, c, xyz2.data<scalar_t>(), n, label1.toType(xyz1.scalar_type()).data<scalar_t>(),
-																								 xyz1.data<scalar_t>(), label2.toType(xyz1.scalar_type()).data<scalar_t>(), dist2.data<scalar_t>(), idx2.data<int>());
+			LabeledNmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*(c+1)*sizeof(scalar_t)>>>(batch_size, m, c, xyz2.data<scalar_t>(), label2.toType(xyz1.scalar_type()).data<scalar_t>(), n,
+																								 xyz1.data<scalar_t>(), label1.toType(xyz1.scalar_type()).data<scalar_t>(), dist2.data<scalar_t>(), idx2.data<int>());
 			})
 	);
 
@@ -195,8 +201,8 @@ int chamfer_cuda_backward(at::Tensor& xyz1, at::Tensor& xyz2, at::Tensor& gradxy
 	const auto m = xyz2.size(1); //num_points point cloud B
 	const auto c = xyz1.size(2); //point dimension
 	// set to zero
-	graddist1.zero_();
-	graddist2.zero_();
+	gradxyz1.zero_();
+	gradxyz2.zero_();
 	CHECK_EQ(xyz2.size(2), c);
 	AT_DISPATCH_FLOATING_TYPES_AND_HALF(
 		xyz1.scalar_type(), "NmDistanceGradKernel", ([&] {

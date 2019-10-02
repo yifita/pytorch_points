@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 from .._ext import losses
-from ..utils.pytorch_utils  import save_grad
 from .operations import faiss_knn
 from . import geo_operations as geo_op
 
@@ -425,7 +424,7 @@ class NmDistanceFunction(torch.autograd.Function):
 nndistance = NmDistanceFunction.apply  # type: ignore
 
 
-class LabeledNmdistanceFunction(NmDistanceFunction):
+class LabeledNmdistanceFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, xyz1, xyz2, label1, label2):
         batchsize, n, _ = xyz1.size()
@@ -445,7 +444,22 @@ class LabeledNmdistanceFunction(NmDistanceFunction):
         idx2 = idx2.cuda()
         losses.labeled_nmdistance_forward(xyz1, xyz2, label1, label2,  dist1, dist2, idx1, idx2)
         ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
+        # ctx.mark_non_differentiable(label1, label2)
         return dist1, dist2
+
+    @staticmethod
+    def backward(ctx, graddist1, graddist2):
+        xyz1, xyz2, idx1, idx2 = ctx.saved_tensors
+        graddist1 = graddist1.contiguous()
+        graddist2 = graddist2.contiguous()
+
+        gradxyz1 = torch.zeros_like(xyz1)
+        gradxyz2 = torch.zeros_like(xyz2)
+
+        gradxyz1 = gradxyz1.cuda()
+        gradxyz2 = gradxyz2.cuda()
+        losses.nmdistance_backward(xyz1, xyz2, gradxyz1, gradxyz2, graddist1, graddist2, idx1, idx2)
+        return gradxyz1, gradxyz2, None, None
 
 labeled_nndistance = LabeledNmdistanceFunction.apply
 
@@ -559,6 +573,8 @@ class ChamferLoss(torch.nn.Module):
 if __name__ == '__main__':
     from .geo_operations import normalize_point_batch
     from ..utils.geometry_utils import array_to_mesh, write_trimesh, generatePolygon
+    from ..utils.pytorch_utils import saved_variables, save_grad
+    from torch.autograd import gradcheck
     # pc1 = torch.randn([2, 600, 2], dtype=torch.float32,
     #                   requires_grad=True).cuda()
     # pc2 = torch.randn([2, 600, 2], dtype=torch.float32,
@@ -579,37 +595,6 @@ if __name__ == '__main__':
     # loss = shape_laplacian(vert1=source_shape, vert2=target_shape, face=faces)
     # print("min lap", loss.min(), "max lap", loss.max())
 
-    shape_laplacian = MeshLaplacianLoss(torch.nn.MSELoss(reduction="none"), use_cot=False, use_norm=True, consistent_topology=True)
-    face = torch.arange(0, 20).reshape(1, 1, -1).cuda()
-    smooth_old = UniformLaplacianSmoothnessLoss(20, face, torch.nn.MSELoss(reduction="mean"))
-    shape_laplacian_old = MeshLaplacianLoss_old(20, face, torch.nn.MSELoss(reduction="none"))
-
-    cage = generatePolygon(0, 0, 1.5, 0, 0, 0, 20)
-    cage = torch.tensor([(x, y) for x, y in cage], dtype=torch.float).unsqueeze(0).cuda().requires_grad_(True)
-
-    cage2 = generatePolygon(0, 0, 1.5, 0.1, 0.1, 0.1, 20)
-    cage2 = torch.tensor([(x, y) for x, y in cage2], dtype=torch.float).unsqueeze(0).cuda().requires_grad_(True)
-
-    loss1 = shape_laplacian(vert1=cage, face=face)
-    loss2 = smooth_old(cage)
-    loss1.mean().backward()
-    grad1 = cage.grad
-    loss2.mean().backward()
-    grad2 = cage.grad
-
-    print(torch.eq(grad1, grad2))
-
-    shape_laplacian.use_norm = False
-    loss1 = shape_laplacian(vert1=cage, vert2=cage2, face=face)
-    loss2 = shape_laplacian_old(cage, cage2)
-    loss1.mean().backward()
-    grad1_1 = cage.grad
-    grad1_2 = cage2.grad
-    loss2.mean().backward()
-    grad2_1 = cage.grad
-    grad2_2 = cage2.grad
-    print(torch.eq(grad1_1,grad2_1))
-    print(torch.eq(grad1_2,grad2_2))
     # write_trimesh("./test_mesh_laplacian1.ply", source_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
     # write_trimesh("./test_mesh_laplacian2.ply", target_shape[0], faces[0], v_colors=loss[0], cmap_name="rainbow")
     # _v = mesh.points()
@@ -617,9 +602,48 @@ if __name__ == '__main__':
     # mesh.update_normals()
     # target_normals = torch.from_numpy(mesh.vertex_normals()).to(dtype=torch.float32).unsqueeze(0)
 
+    ###### Labeled chamfer loss ######
+    from ..utils.pc_utils import save_ply_property
+    from .geo_operations import normalize_point_batch
+
+    pnl1 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/1.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
+    pnl2 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/2.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
+
+    V1 = torch.from_numpy(pnl1[:,:3]).cuda().unsqueeze(0)
+    V1, _, _ = normalize_point_batch(V1, NCHW=False)
+    V1 = V1.detach()
+    V1.requires_grad_(True)
+    # seems that the normals are inverted
+    V1_n = -pnl1[:,3:6]
+    V1_l = torch.from_numpy(pnl1[:,6:]).cuda().unsqueeze(0)
+
+    V2 = torch.from_numpy(pnl2[:,:3]).cuda().unsqueeze(0)
+    V2, _, _ = normalize_point_batch(V2, NCHW=False)
+    V2 = V2.detach()
+    # V2.requires_grad_(True)
+    # seems that the normals are inverted
+    V2_n = -pnl2[:,3:6]
+    V2_l = torch.from_numpy(pnl2[:,6:]).cuda().unsqueeze(0)
+    d12, d21 = nndistance(V1, V2)
+    loss = torch.mean(d12) + torch.mean(d21)
+    loss.backward(torch.ones_like(loss))
+    import pdb; pdb.set_trace()
+    print(V1.grad)
+    print(V2.grad)
+
+    d12, d21 = labeled_nndistance(V1, V2, V1_l, V2_l)
+    save_ply_property(V1[0].cpu().detach().numpy(), V1_l[0,:,0].cpu().numpy(), "./test_labeled_nmdistance_input1.ply", normals=V1_n, cmap_name="Set1")
+    save_ply_property(V2[0].cpu().detach().numpy(), V2_l[0,:,0].cpu().numpy(), "./test_labeled_nmdistance_input2.ply", normals=V2_n, cmap_name="Set1")
+    save_ply_property(V1[0].cpu().detach().numpy(), d12[0].cpu().detach().numpy(), "./test_labeled_nmdistance1.ply", normals=V1_n, cmap_name="rainbow")
+    save_ply_property(V2[0].cpu().detach().numpy(), d21[0].cpu().detach().numpy(), "./test_labeled_nmdistance2.ply", normals=V2_n, cmap_name="rainbow")
+    loss = torch.mean(d12) + torch.mean(d21)
+    d12.backward(torch.ones_like(d12))
+    # loss.backward(torch.cuda.FloatTensor([1.0]))
+    import pdb; pdb.set_trace()
+    print(V1.grad)
+    print(V2.grad)
     # test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
     # print(test)
-    # from torch.autograd import gradcheck
     # pc2 = pc2.detach()
     # test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
     # print(test)
