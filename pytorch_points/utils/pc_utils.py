@@ -11,6 +11,7 @@ import plyfile
 
 def normalize_point_cloud(input):
     """
+    recenter point cloud to mean value and rescale to fit inside a unit ball
     input: pc [N, P, dim] or [P, dim]
     output: pc, centroid, furthest_distance
     """
@@ -22,6 +23,26 @@ def normalize_point_cloud(input):
     input = input - centroid
     furthest_distance = np.amax(
         np.sqrt(np.sum(input ** 2, axis=-1, keepdims=True)), axis=axis, keepdims=True)
+    input = input / furthest_distance
+    return input, centroid, furthest_distance
+
+def normalize_to_box(input):
+    """
+    normalize point cloud to unit bounding box
+    center = (max - min)/2
+    scale = max(abs(x))
+    input: pc [N, P, dim] or [P, dim]
+    output: pc, centroid, furthest_distance
+    """
+    if len(input.shape) == 2:
+        axis = 0
+    elif len(input.shape) == 3:
+        axis = 1
+    maxP = np.amax(input, axis=axis, keepdims=True)
+    minP = np.amin(input, axis=axis, keepdims=True)
+    centroid = (maxP+minP)/2
+    input = input - centroid
+    furthest_distance = np.max(np.abs(input))
     input = input / furthest_distance
     return input, centroid, furthest_distance
 

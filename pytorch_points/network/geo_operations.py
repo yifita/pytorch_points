@@ -82,6 +82,27 @@ def normalize_point_batch(pc: torch.Tensor, NCHW=True):
     pc = pc / furthest_distance
     return pc, centroid, furthest_distance
 
+def normalize_point_batch_to_box(pc: torch.Tensor, NCHW=True):
+    """
+    normalize a batch of point clouds
+    :param
+        pc      [B, N, 3] or [B, 3, N]
+        NCHW    if True, treat the second dimension as channel dimension
+    :return
+        pc      normalized point clouds, same shape as input
+        centroid [B, 1, 3] or [B, 3, 1] center of point clouds
+        furthest_distance [B, 1, 1] scale of point clouds
+    """
+    point_axis = 2 if NCHW else 1
+    dim_axis = 1 if NCHW else 2
+    minP = torch.min(pc, dim=point_axis, keepdim=True)[0]
+    maxP = torch.max(pc, dim=point_axis, keepdim=True)[0]
+    centroid = (minP+maxP)/2
+    pc = pc - centroid
+    furthest_distance, _ = torch.abs(pc).max()
+    pc = pc / furthest_distance
+    return pc, centroid, furthest_distance
+
 
 def batch_normals(points, base=None, nn_size=20, NCHW=True):
     """

@@ -3,6 +3,7 @@ import numpy as np
 from .._ext import losses
 from .operations import faiss_knn
 from . import geo_operations as geo_op
+from matplotlib import cm
 
 
 class UniformLaplacianSmoothnessLoss(torch.nn.Module):
@@ -404,10 +405,11 @@ class NmDistanceFunction(torch.autograd.Function):
         idx2 = idx2.cuda()
         losses.nmdistance_forward(xyz1, xyz2, dist1, dist2, idx1, idx2)
         ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
-        return dist1, dist2
+        ctx.mark_non_differentiable(idx1, idx2)
+        return dist1, dist2, idx1, idx2
 
     @staticmethod
-    def backward(ctx, graddist1, graddist2):
+    def backward(ctx, graddist1, graddist2, gradNone1, gradNone2):
         xyz1, xyz2, idx1, idx2 = ctx.saved_tensors
         graddist1 = graddist1.contiguous()
         graddist2 = graddist2.contiguous()
@@ -444,11 +446,11 @@ class LabeledNmdistanceFunction(torch.autograd.Function):
         idx2 = idx2.cuda()
         losses.labeled_nmdistance_forward(xyz1, xyz2, label1, label2,  dist1, dist2, idx1, idx2)
         ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
-        # ctx.mark_non_differentiable(label1, label2)
-        return dist1, dist2
+        ctx.mark_non_differentiable(idx1, idx2)
+        return dist1, dist2, idx1, idx2
 
     @staticmethod
-    def backward(ctx, graddist1, graddist2):
+    def backward(ctx, graddist1, graddist2, gradNone1, gradNone2):
         xyz1, xyz2, idx1, idx2 = ctx.saved_tensors
         graddist1 = graddist1.contiguous()
         graddist2 = graddist2.contiguous()
@@ -534,7 +536,7 @@ class ChamferLoss(torch.nn.Module):
         if gt_mask is not None:
             gt = torch.where(gt_mask.unsqueeze(-1), gt, torch.full(gt.shape, float("Inf"), device=gt.device, dtype=gt.dtype))
 
-        pred2gt, gt2pred = nndistance(pred, gt)
+        pred2gt, gt2pred, _, _ = nndistance(pred, gt)
 
         if self.__threshold is not None:
             threshold = self.__threshold
@@ -603,11 +605,11 @@ if __name__ == '__main__':
     # target_normals = torch.from_numpy(mesh.vertex_normals()).to(dtype=torch.float32).unsqueeze(0)
 
     ###### Labeled chamfer loss ######
-    from ..utils.pc_utils import save_ply_property
+    from ..utils.pc_utils import save_ply_property, save_ply
     from .geo_operations import normalize_point_batch
 
-    pnl1 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/1.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
-    pnl2 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/2.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
+    pnl1 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/15.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
+    pnl2 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/16.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
 
     V1 = torch.from_numpy(pnl1[:,:3]).cuda().unsqueeze(0)
     V1, _, _ = normalize_point_batch(V1, NCHW=False)
@@ -624,22 +626,32 @@ if __name__ == '__main__':
     # seems that the normals are inverted
     V2_n = -pnl2[:,3:6]
     V2_l = torch.from_numpy(pnl2[:,6:]).cuda().unsqueeze(0)
-    d12, d21 = nndistance(V1, V2)
+    d12, d21, _, _ = nndistance(V1, V2)
     loss = torch.mean(d12) + torch.mean(d21)
     loss.backward(torch.ones_like(loss))
-    import pdb; pdb.set_trace()
     print(V1.grad)
     print(V2.grad)
 
-    d12, d21 = labeled_nndistance(V1, V2, V1_l, V2_l)
+    d12, d21, idx1, idx2 = labeled_nndistance(V1, V2, V1_l, V2_l)
     save_ply_property(V1[0].cpu().detach().numpy(), V1_l[0,:,0].cpu().numpy(), "./test_labeled_nmdistance_input1.ply", normals=V1_n, cmap_name="Set1")
     save_ply_property(V2[0].cpu().detach().numpy(), V2_l[0,:,0].cpu().numpy(), "./test_labeled_nmdistance_input2.ply", normals=V2_n, cmap_name="Set1")
     save_ply_property(V1[0].cpu().detach().numpy(), d12[0].cpu().detach().numpy(), "./test_labeled_nmdistance1.ply", normals=V1_n, cmap_name="rainbow")
     save_ply_property(V2[0].cpu().detach().numpy(), d21[0].cpu().detach().numpy(), "./test_labeled_nmdistance2.ply", normals=V2_n, cmap_name="rainbow")
+    cmap = cm.get_cmap("rainbow")
+    zValue = V1[0,:,2]
+    colors1 = cmap(zValue.detach().cpu().numpy())[:,:3]
+    colors2 = np.take(colors1, idx2.detach().cpu().numpy()[0], axis=0)
+    save_ply(V1[0].cpu().detach().numpy(), "./test_labeled_nmdistance_reg11.ply", colors=colors1)
+    save_ply(V2[0].cpu().detach().numpy(), "./test_labeled_nmdistance_reg12.ply", colors=colors2)
+    zValue = V2[0,:,2]
+    colors2 = cmap(zValue.detach().cpu().numpy())[:,:3]
+    colors1 = np.take(colors2, idx1.detach().cpu().numpy()[0], axis=0)
+    save_ply(V1[0].cpu().detach().numpy(), "./test_labeled_nmdistance_reg21.ply", colors=colors1)
+    save_ply(V2[0].cpu().detach().numpy(), "./test_labeled_nmdistance_reg22.ply", colors=colors2)
+
     loss = torch.mean(d12) + torch.mean(d21)
     d12.backward(torch.ones_like(d12))
     # loss.backward(torch.cuda.FloatTensor([1.0]))
-    import pdb; pdb.set_trace()
     print(V1.grad)
     print(V2.grad)
     # test = gradcheck(nndistance, [pc1, pc2], eps=1e-3, atol=1e-4)
