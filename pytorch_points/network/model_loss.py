@@ -390,6 +390,10 @@ class NmDistanceFunction(torch.autograd.Function):
     """3D point set to 3D point set distance"""
     @staticmethod
     def forward(ctx, xyz1, xyz2):
+        xyz1 = xyz1.contiguous()
+        xyz2 = xyz2.contiguous()
+        assert(xyz1.is_contiguous())
+        assert(xyz2.is_contiguous())
         batchsize, n, _ = xyz1.size()
         _, m, _ = xyz2.size()
         assert(xyz1.dtype==xyz2.dtype)
@@ -468,20 +472,21 @@ labeled_nndistance = LabeledNmdistanceFunction.apply
 class ChamferLoss(torch.nn.Module):
     """
     chamfer loss. bidirectional nearest neighbor distance of two point sets.
+    mean_{xyz1}(nd_{1to2})+\beta*max_{xyz1}(nd_{1to2})+(\gamma+\delta|xyz1|)mean_{xyz2}(nd_{2to1})
     Args:
         threshold (float): distance beyond threshold*average_distance not be considered
-        forward_weight (float): if != 1, different weight for chamfer distance forward and backward
         percentage (float): consider a percentage of inner points
         max (bool): use hausdorf, i.e. use max instead of mean
     """
 
-    def __init__(self, threshold=None, forward_weight=1.0, percentage=1.0, reduction="mean"):
+    def __init__(self, threshold=None, beta=1.0, gamma=1, delta=0, percentage=1.0):
         super(ChamferLoss, self).__init__()
         # only consider distance smaller than threshold*mean(distance) (remove outlier)
         self.__threshold = threshold
-        self.forward_weight = forward_weight
+        self.beta = beta
+        self.gamma = gamma
+        self.delta = delta
         self.percentage = percentage
-        self.reduction = reduction
 
     def set_threshold(self, value):
         self.__threshold = value
@@ -504,12 +509,13 @@ class ChamferLoss(torch.nn.Module):
         assert(pred.size(2) == gt.size(2)), "input and output must be (B,N,D) and (B,M,D)"
         assert(pred.is_contiguous())
         assert(gt.is_contiguous())
+        B,N,_ = pred.shape
+        B,M,_ = gt.shape
 
         # discard border points
         if self.percentage < 1.0:
             pred_center = torch.mean(pred, dim=1, keepdim=True)
-            num_point = pred.size(1)
-            pred, _, _ = faiss_knn(int(self.percentage * num_point), pred_center, pred, unique=False, NCHW=False)
+            pred, _, _ = faiss_knn(int(self.percentage * N), pred_center, pred, unique=False, NCHW=False)
             pred = torch.squeeze(pred, dim=1)
             # # BxN
             # dist_sqr = torch.sum((pred - pred_center)**2, dim=-1)
@@ -520,8 +526,7 @@ class ChamferLoss(torch.nn.Module):
             # pred2gt = pred2gt * weight
 
             gt_center = torch.mean(gt, dim=1, keepdim=True)
-            num_point = gt.size(1)
-            gt, _, _ = faiss_knn(int(self.percentage * num_point), gt_center, gt, unique=False, NCHW=False)
+            gt, _, _ = faiss_knn(int(self.percentage * M), gt_center, gt, unique=False, NCHW=False)
             gt = torch.squeeze(gt, dim=1)
             # # BxN
             # dist_sqr = torch.sum((label - label_center)**2, dim=-1)
@@ -556,19 +561,8 @@ class ChamferLoss(torch.nn.Module):
             gt2pred = torch.where(gt_mask, gt2pred, torch.zeros_like(gt2pred))
 
         # pred2gt is for each element in gt, the closest distance to this element
-        if self.reduction == "mean":
-            loss = torch.mean(pred2gt, dim=-1) * self.forward_weight + torch.mean(gt2pred, dim=-1)
-            loss = torch.mean(loss)
-        elif self.reduction == "sum":
-            loss = torch.sum(pred2gt, dim=-1) * self.forward_weight + torch.sum(gt2pred, dim=-1)
-            loss = torch.mean(loss)
-        elif self.reduction == "max":
-            loss = torch.max(pred2gt, dim=-1)[0] * self.forward_weight + torch.max(gt2pred, dim=-1)[0]
-            loss = torch.mean(loss)
-        elif self.reduction == "none":
-            loss = torch.mean(pred2gt, dim=-1) * self.forward_weight + torch.mean(gt2pred, dim=-1)
-        else:
-            raise NotImplementedError
+        loss = torch.mean(pred2gt, dim=-1) + torch.mean(gt2pred, dim=-1)*(self.delta*N+self.gamma)+torch.max(pred2gt, dim=-1)[0]*self.beta
+        loss = torch.mean(loss)
         return loss
 
 

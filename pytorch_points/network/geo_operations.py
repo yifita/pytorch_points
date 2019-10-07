@@ -111,8 +111,8 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True):
     The direction of normal could flip.
 
     Args:
-        points: (B,C,M)
-        base:   (B,C,N)
+        points:  (B,C,M)
+        base:    (B,C,N)
     Returns:
         normals: (B,C,M)
     """

@@ -270,7 +270,10 @@ def build_gemm(mesh, faces):
 
 def get_edge_points(mesh):
     """
-    get 4 edge points
+    get 4 edge points of all points
+    ===
+    return:
+        edge_points (E, 4) int64
     """
     edge_points = np.zeros([mesh.edges_count, 4], dtype=np.int64)
     for edge_id, edge in enumerate(mesh.edges):
