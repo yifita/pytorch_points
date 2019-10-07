@@ -517,30 +517,6 @@ def mean_value_coordinates(points, polygon):
     return phi
 
 
-def edge_vertex_indices(F):
-    """
-    Given F matrix of a triangle mesh return unique edge vertices of a mesh Ex2 tensor
-    params:
-        F (F,L) tensor or numpy
-    return:
-        E (E,2) tensor or numpy
-    """
-    if isinstance(F, torch.Tensor):
-        # F,L,2
-        edges = torch.stack([F, F[:,[1, 2, 0]]], dim=-1)
-        edges = torch.sort(edges, dim=-1)[0]
-        # FxL,2
-        edges = edges.reshape(-1, 2)
-        # E,2
-        edges = torch.unique(edges, dim=0)
-    else:
-        edges = np.stack([F, F[:,[1,2,0]]], axis=-1)
-        edges = np.sort(edges, axis=-1)
-        edges = edges.reshape([-1, 2])
-        edges = np.unique(edges, axis=0)
-    return edges
-
-
 def compute_face_normals_and_areas(vertices: torch.Tensor, faces: torch.Tensor):
     """
     :params

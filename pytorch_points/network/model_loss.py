@@ -336,13 +336,23 @@ class SmapeLoss(torch.nn.Module):
         return torch.mean(torch.abs(x-y)/(torch.abs(x)+torch.abs(y)+self.epsilon))
 
 class NormalLoss(torch.nn.Module):
-    def __init__(self, metric, nn_size=10):
+    """
+    compare the PCA normals of two point clouds
+    ===
+    params:
+        NCHW: order of dimensions, default True
+        pred: (B,3,N) if NCHW, (B,N,3) otherwise
+        gt  : (B,3,N) if NCHW, (B,N,3) otherwise
+    """
+    def __init__(self, metric, nn_size=10, NCHW=True):
+        super().__init__()
         self.nn_size = nn_size
         self.metric = metric
+        self.NCHW = NCHW
 
     def forward(self, pred, gt):
-        pred_normals = geo_op.batch_normals(pred, nn_size=10, NCHW=True)
-        gt_normals = geo_op.batch_normals(gt, nn_size=10, NCHW=True)
+        pred_normals = geo_op.batch_normals(pred, nn_size=10, NCHW=self.NCHW)
+        gt_normals = geo_op.batch_normals(gt, nn_size=10, NCHW=self.NCHW)
         # compare the normal with the closest point
         return self.metric(pred_normals, gt_normals)
 
