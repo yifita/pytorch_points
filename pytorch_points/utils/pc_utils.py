@@ -3,13 +3,13 @@ Utility functions for processing point clouds.
 """
 import os
 import numpy as np
-
+import torch
 # Point cloud IO
 from matplotlib import cm
 import plyfile
 
 
-def normalize_point_cloud(input):
+def normalize_to_sphere(input):
     """
     recenter point cloud to mean value and rescale to fit inside a unit ball
     input: pc [N, P, dim] or [P, dim]
@@ -19,11 +19,19 @@ def normalize_point_cloud(input):
         axis = 0
     elif len(input.shape) == 3:
         axis = 1
-    centroid = np.mean(input, axis=axis, keepdims=True)
-    input = input - centroid
-    furthest_distance = np.amax(
-        np.sqrt(np.sum(input ** 2, axis=-1, keepdims=True)), axis=axis, keepdims=True)
-    input = input / furthest_distance
+    if isinstance(input, np.ndarray):
+        centroid = np.mean(input, axis=axis, keepdims=True)
+        input = input - centroid
+        furthest_distance = np.amax(
+            np.sqrt(np.sum(input ** 2, axis=-1, keepdims=True)), axis=axis, keepdims=True)
+        input = input / furthest_distance
+    elif isinstance(input, torch.Tensor):
+        centroid = torch.mean(input, dim=axis, keepdims=True)
+        input = input - centroid
+        furthest_distance = torch.max(
+            torch.sqrt(torch.sum(input ** 2, dim=-1, keepdims=True)), dim=axis, keepdims=True)[0]
+        input = input / furthest_distance
+
     return input, centroid, furthest_distance
 
 def normalize_to_box(input):
@@ -38,12 +46,21 @@ def normalize_to_box(input):
         axis = 0
     elif len(input.shape) == 3:
         axis = 1
-    maxP = np.amax(input, axis=axis, keepdims=True)
-    minP = np.amin(input, axis=axis, keepdims=True)
-    centroid = (maxP+minP)/2
-    input = input - centroid
-    furthest_distance = np.max(np.abs(input))
-    input = input / furthest_distance
+    if isinstance(input, np.ndarray):
+        maxP = np.amax(input, axis=axis, keepdims=True)
+        minP = np.amin(input, axis=axis, keepdims=True)
+        centroid = (maxP+minP)/2
+        input = input - centroid
+        furthest_distance = np.max(np.abs(input))
+        input = input / furthest_distance
+    elif isinstance(input, torch.Tensor):
+        maxP = torch.max(input, dim=axis, keepdims=True)[0]
+        minP = torch.min(input, dim=axis, keepdims=True)[0]
+        centroid = (maxP+minP)/2
+        centroid = input - centroid
+        furthest_distance = torch.max(torch.abs(input))
+        input = input / furthest_distance
+
     return input, centroid, furthest_distance
 
 
@@ -102,7 +119,7 @@ def rotate_point_cloud_and_gt(batch_data, batch_gt=None):
 
 
 def random_scale_point_cloud_and_gt(batch_data, batch_gt=None, scale_low=0.5, scale_high=2):
-    """ Randomly scale the point cloud. Scale is per point cloud.
+    """ Randomly scale the point cloud. Scale is per point cloud, i.e. isotropic
         Input:
             BxNx3 array, original batch of point clouds
         Return:
@@ -331,3 +348,89 @@ def save_ply_property(points, property, filename, property_max=None, normals=Non
     for point_idx in range(point_num):
         colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
     save_ply(points, filename, colors, normals, binary)
+
+""" 
+augmentation operations for a point cloud (TODO: extend to batches of point clouds)
+https://github.com/ThibaultGROUEIX/CycleConsistentDeformation/blob/master/auxiliary/normalize_points.py
+"""
+def get_3D_rot_matrix(axis, angle):
+    if axis == 0:
+        return np.array([[1, 0, 0], [0, np.cos(angle), -np.sin(angle)], [0, np.sin(angle), np.cos(angle)]])
+    if axis == 1:
+        return np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [- np.sin(angle), 0, np.cos(angle)]])
+    if axis == 2:
+        return np.array([[np.cos(theta), -np.sin(theta), 0], [np.sin(angle), np.cos(angle), 0], [1, 0, 0]])
+
+def uniform_rotation_axis_matrix(axis=0, range_rot=360):
+    # input : Numpy Tensor N_pts, 3
+    # ouput : Numpy Tensor N_pts, 3
+    # ouput : rot matrix Numpy Tensor 3, 3
+    # Uniform random rotation around axis
+    scale_factor = 360.0 / range_rot
+    theta = np.random.uniform(- np.pi / scale_factor, np.pi / scale_factor)
+    rot_matrix = get_3D_rot_matrix(axis, theta)
+    return torch.from_numpy(np.transpose(rot_matrix)).float()
+
+
+def uniform_rotation_axis(points, axis=0, normals=False, range_rot=360):
+    # input : Numpy Tensor N_pts, 3
+    # ouput : Numpy Tensor N_pts, 3
+    # ouput : rot matrix Numpy Tensor 3, 3
+    # Uniform random rotation around axis
+    rot_matrix = uniform_rotation_axis_matrix(axis, range_rot)
+
+    if isinstance(points, torch.Tensor):
+        points[:, :3] = torch.mm(points[:, :3], rot_matrix)
+        if normals:
+            points[:, 3:6] = torch.mm(points[:, 3:6], rot_matrix)
+        return points, rot_matrix
+    elif isinstance(points, np.ndarray):
+        points = points.copy()
+        points[:, :3] = points[:, :3].dot(rot_matrix.numpy())
+        if normals:
+            points[:, 3:6] = points[:, 3:6].dot(rot_matrix.numpy())
+        return points, rot_matrix
+    else:
+        print("Pierre-Alain was right.")
+
+def anisotropic_scaling(points):
+    # input : points : N_point, 3
+    scale = torch.rand(1, 3) / 2.0 + 0.75  # uniform sampling 0.75, 1.25
+    return scale * points  # Element_wize multiplication with broadcasting
+
+def uniform_rotation_sphere(points, normals=False):
+    # input : Tensor N_pts, 3
+    # ouput : Tensor N_pts, 3
+    # ouput : rot matrix Numpy Tensor 3, 3
+    # Uniform random rotation on the sphere
+    x = torch.Tensor(2)
+    x.uniform_()
+    p = torch.Tensor([[np.cos(np.pi * 2 * x[0]) * np.sqrt(x[1]),
+                       (np.random.binomial(1, 0.5, 1)[0] * 2 - 1) * np.sqrt(1 - x[1]),
+                       np.sin(np.pi * 2 * x[0]) * np.sqrt(x[1])]])
+    z = torch.Tensor([[0, 1, 0]])
+    v = (p - z) / (p - z).norm()
+    H = torch.eye(3) - 2 * torch.matmul(v.transpose(1, 0), v)
+    rot_matrix = - H
+
+    if isinstance(points, torch.Tensor):
+        points[:, :3] = torch.mm(points[:, :3], rot_matrix)
+        if normals:
+            points[:, 3:6] = torch.mm(points[:, 3:6], rot_matrix)
+        return points, rot_matrix
+
+    elif isinstance(points, np.ndarray):
+        points[:, :3] = points[:, :3].dot(rot_matrix.numpy())
+        if normals:
+            points[:, 3:6] = points[:, 3:6].dot(rot_matrix.numpy())
+        return points, rot_matrix
+    else:
+        print("Pierre-Alain was right.")
+
+def add_random_translation(points, scale=0.03):
+    # input : Numpy Tensor N_pts, D_dim
+    # ouput : Numpy Tensor N_pts, D_dim
+    # Uniform random translation on first 3 dimensions
+    a = torch.FloatTensor(3)
+    points[:, 0:3] = points[:, 0:3] + (a.uniform_(-1, 1) * scale).unsqueeze(0).expand(-1, 3)
+    return points

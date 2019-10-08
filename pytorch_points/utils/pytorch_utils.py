@@ -118,3 +118,45 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     np.random.seed(seed)
+
+class AverageValueMeter(object):
+    """
+    Slightly fancier than the standard AverageValueMeter
+    """
+
+    def __init__(self):
+        super(AverageValueMeter, self).__init__()
+        self.reset()
+        self.val = 0
+
+    def update(self, value, n=1):
+        self.val = value
+        self.sum += value
+        self.var += value * value
+        self.n += n
+
+        if self.n == 0:
+            self.avg, self.std = np.nan, np.nan
+        elif self.n == 1:
+            self.avg = 0.0 + self.sum  # This is to force a copy in torch/numpy
+            self.std = np.inf
+            self.avg_old = self.avg
+            self.m_s = 0.0
+        else:
+            self.avg = self.avg_old + (value - n * self.avg_old) / float(self.n)
+            self.m_s += (value - self.avg_old) * (value - self.avg)
+            self.avg_old = self.avg
+            self.std = np.sqrt(self.m_s / (self.n - 1.0))
+
+    def value(self):
+        return self.avg, self.std
+
+    def reset(self):
+        self.n = 0
+        self.sum = 0.0
+        self.var = 0.0
+        self.val = 0.0
+        self.avg = np.nan
+        self.avg_old = 0.0
+        self.m_s = 0.0
+        self.std = np.nan

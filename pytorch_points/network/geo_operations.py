@@ -62,7 +62,7 @@ def furthest_point_sample(xyz, npoint, NCHW=True, seedIdx=0):
     return idx, sampled_pc
 
 
-def normalize_point_batch(pc: torch.Tensor, NCHW=True):
+def normalize_point_batch_to_sphere(pc: torch.Tensor, NCHW=True):
     """
     normalize a batch of point clouds
     :param

@@ -577,7 +577,7 @@ class ChamferLoss(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    from .geo_operations import normalize_point_batch
+    from .geo_operations import normalize_point_batch_to_sphere
     from ..utils.geometry_utils import array_to_mesh, write_trimesh, generatePolygon
     from ..utils.pytorch_utils import saved_variables, save_grad
     from torch.autograd import gradcheck
@@ -594,7 +594,7 @@ if __name__ == '__main__':
     # shape_laplacian = MeshLaplacianLoss(torch.nn.MSELoss(reduction="none"), use_cot=False, use_norm=True, consistent_topology=True)
     # faces = torch.from_numpy(np.loadtxt("/home/yifan/Data/Chicken-3D-movie/chicken_T.txt", dtype=np.int64)).unsqueeze(0)
     # sequence = torch.from_numpy(np.load("/home/yifan/Data/Chicken-3D-movie/vertices.npy")).to(dtype=torch.float32)
-    # sequence, _, _ = normalize_point_batch(sequence, NCHW=False)
+    # sequence, _, _ = normalize_point_batch_to_sphere(sequence, NCHW=False)
     # mesh = array_to_mesh(sequence[0].numpy(), faces[0].numpy(), v_normals=True)
     # source_shape = torch.narrow(sequence, 0, 0, 1)
     # target_shape = torch.narrow(sequence, 0, 354, 1)
@@ -610,13 +610,13 @@ if __name__ == '__main__':
 
     ###### Labeled chamfer loss ######
     from ..utils.pc_utils import save_ply_property, save_ply
-    from .geo_operations import normalize_point_batch
+    from .geo_operations import normalize_point_batch_to_sphere
 
     pnl1 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/15.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
     pnl2 = np.loadtxt("/home/mnt/points/data/Coseg_Wang/Coseg_Wang_processed/Vase300Points/16.pts", dtype=np.float32, converters={6: lambda x: np.float32(x[1:-1])})
 
     V1 = torch.from_numpy(pnl1[:,:3]).cuda().unsqueeze(0)
-    V1, _, _ = normalize_point_batch(V1, NCHW=False)
+    V1, _, _ = normalize_point_batch_to_sphere(V1, NCHW=False)
     V1 = V1.detach()
     V1.requires_grad_(True)
     # seems that the normals are inverted
@@ -624,7 +624,7 @@ if __name__ == '__main__':
     V1_l = torch.from_numpy(pnl1[:,6:]).cuda().unsqueeze(0)
 
     V2 = torch.from_numpy(pnl2[:,:3]).cuda().unsqueeze(0)
-    V2, _, _ = normalize_point_batch(V2, NCHW=False)
+    V2, _, _ = normalize_point_batch_to_sphere(V2, NCHW=False)
     V2 = V2.detach()
     # V2.requires_grad_(True)
     # seems that the normals are inverted
