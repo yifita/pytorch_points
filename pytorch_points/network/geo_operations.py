@@ -343,7 +343,7 @@ def cotangent(V, F):
 
     return C
 
-def mean_value_coordinates_3D(query, vertices, faces):
+def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
     """
     Tao Ju et.al. MVC for 3D triangle meshes
     params:
@@ -388,7 +388,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
     # si← sign[det[u1,u2,u3]]sqrt(1-ci^2)
     # (B,P,F)*(B,P,F,3)
 
-    si = torch.sign(torch.det(ui).detach()).unsqueeze(-1)*torch.sqrt(1-ci**2)  # sqrt gradient nan for 0
+    si = torch.sign(torch.det(ui)).unsqueeze(-1)*torch.sqrt(1-ci**2)  # sqrt gradient nan for 0
     assert(check_values(si))
     # (B,P,F,3)
     di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
@@ -441,15 +441,18 @@ def mean_value_coordinates_3D(query, vertices, faces):
     sumWj = torch.sum(wj, dim=-1, keepdim=True)
     sumWj = torch.where(sumWj==0, torch.ones_like(sumWj), sumWj)
 
-    wj = wj / sumWj
+    wj_normalised = wj / sumWj
     # if wj.requires_grad:
     #     saved_variables["mvc/wi"] = wi
     #     wi.register_hook(save_grad("mvc/dwi"))
     #     wj.register_hook(save_grad("mvc/dwj"))
-    return wj
+    if verbose:
+        return wj_normalised, wi
+    else:
+        return wj_normalised
 
 
-def mean_value_coordinates(points, polygon):
+def mean_value_coordinates(points, polygon, verbose=False):
     """
     compute wachspress MVC of points wrt a polygon
     https://www.mn.uio.no/math/english/people/aca/michaelf/papers/barycentric.pdf
@@ -514,6 +517,8 @@ def mean_value_coordinates(points, polygon):
     if torch.nonzero(sumW==0).numel() > 0:
         sumW = torch.where(sumW==0, torch.ones_like(w), w)
     phi = w/sumW
+    if verbose:
+        return phi, w
     return phi
 
 
