@@ -394,13 +394,13 @@ def mean_value_coordinates_3D(query, vertices, faces):
     di = torch.gather(dj.unsqueeze(2).squeeze(-1).expand(-1,-1,F,-1), 3,
                       faces.unsqueeze(1).expand(-1,P,-1,-1))
     assert(check_values(di))
-    if si.requires_grad:
-        vertices.register_hook(save_grad("mvc/dv"))
-        li.register_hook(save_grad("mvc/dli"))
-        theta_i.register_hook(save_grad("mvc/dtheta"))
-        ci.register_hook(save_grad("mvc/dci"))
-        si.register_hook(save_grad("mvc/dsi"))
-        di.register_hook(save_grad("mvc/ddi"))
+    # if si.requires_grad:
+    #     vertices.register_hook(save_grad("mvc/dv"))
+    #     li.register_hook(save_grad("mvc/dli"))
+    #     theta_i.register_hook(save_grad("mvc/dtheta"))
+    #     ci.register_hook(save_grad("mvc/dci"))
+    #     si.register_hook(save_grad("mvc/dsi"))
+    #     di.register_hook(save_grad("mvc/ddi"))
 
     # wi← (θi −c[i+1]θ[i−1] −c[i−1]θ[i+1])/(disin[θi+1]s[i−1])
     # B,P,F,3
@@ -429,7 +429,7 @@ def mean_value_coordinates_3D(query, vertices, faces):
     wi = torch.where(inside_triangle.unsqueeze(-1).expand(-1,-1,-1,wi.shape[-1]), torch.sin(theta_i)*di[:,:,:,[2,0,1]]*di[:,:,:,[1,2,0]], wi)
 
     # sum over all faces face -> vertex (B,P,F*3) -> (B,P,N)
-    wj = scatter_add(wi.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1).reshape(B,P,-1), 2)
+    wj = scatter_add(wi.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1).reshape(B,P,-1), 2, out_size=(B,P,N))
 
     # close to vertex (B,P,N)
     close_to_point = dj.squeeze(-1) < 1e-8
@@ -442,10 +442,10 @@ def mean_value_coordinates_3D(query, vertices, faces):
     sumWj = torch.where(sumWj==0, torch.ones_like(sumWj), sumWj)
 
     wj = wj / sumWj
-    if wj.requires_grad:
-        saved_variables["mvc/wi"] = wi
-        wi.register_hook(save_grad("mvc/dwi"))
-        wj.register_hook(save_grad("mvc/dwj"))
+    # if wj.requires_grad:
+    #     saved_variables["mvc/wi"] = wi
+    #     wi.register_hook(save_grad("mvc/dwi"))
+    #     wj.register_hook(save_grad("mvc/dwj"))
     return wj
 
 
