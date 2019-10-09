@@ -99,7 +99,7 @@ def normalize_point_batch_to_box(pc: torch.Tensor, NCHW=True):
     maxP = torch.max(pc, dim=point_axis, keepdim=True)[0]
     centroid = (minP+maxP)/2
     pc = pc - centroid
-    furthest_distance, _ = torch.abs(pc).max()
+    furthest_distance = torch.abs(pc).max()
     pc = pc / furthest_distance
     return pc, centroid, furthest_distance
 
