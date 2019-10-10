@@ -343,6 +343,7 @@ def cotangent(V, F):
 
     return C
 
+
 def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
     """
     Tao Ju et.al. MVC for 3D triangle meshes
@@ -417,14 +418,15 @@ def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
     #                                       triangle_points[:,:,:,2]-triangle_points[:,:,:,0], dim=-1).unsqueeze(1), dim=-1, keepdim=True).detach()
     # # (B,P,F,1)
     # sqrdist = determinant*determinant / (4 * sqrNorm(torch.cross(triangle_points[:,:,:,1]-triangle_points[:,:,:,0], triangle_points[:,:,:,2]-triangle_points[:,:,:,0], dim=-1), keepdim=True))
-    wi = torch.where(torch.any(torch.abs(si) <= 1e-5, keepdim=True, dim=-1), torch.zeros_like(wi), wi.clone())
+
+    wi = torch.where(torch.any(torch.abs(si) <= 1e-5, keepdim=True, dim=-1), torch.zeros_like(wi), wi)
     # wi = torch.where(sqrdist <= 1e-5, torch.zeros_like(wi), wi)
 
     # if π −h < ε, x lies on t, use 2D barycentric coordinates
     # inside triangle
     inside_triangle = (PI-h).squeeze(-1)<1e-4
     # set all F for this P to zero
-    wi = torch.where(torch.any(inside_triangle, dim=-1, keepdim=True).unsqueeze(-1), torch.zeros_like(wi), wi.clone())
+    wi = torch.where(torch.any(inside_triangle, dim=-1, keepdim=True).unsqueeze(-1), torch.zeros_like(wi), wi)
     # CHECK is it di https://www.cse.wustl.edu/~taoju/research/meanvalue.pdf or li http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.516.1856&rep=rep1&type=pdf
     wi = torch.where(inside_triangle.unsqueeze(-1).expand(-1,-1,-1,wi.shape[-1]), torch.sin(theta_i)*di[:,:,:,[2,0,1]]*di[:,:,:,[1,2,0]], wi)
 
@@ -447,7 +449,7 @@ def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
     #     wi.register_hook(save_grad("mvc/dwi"))
     #     wj.register_hook(save_grad("mvc/dwj"))
     if verbose:
-        return wj_normalised, wi
+        return wj_normalised, wi, si
     else:
         return wj_normalised
 
@@ -612,6 +614,100 @@ def get_normals(vertices: torch.Tensor, edge_points: torch.Tensor, side: int):
     if not check_values:
         import pdb; pdb.set_trace()
     return normals
+
+# def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
+def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False):
+    """
+    Lipman et.al. sum_{i\in N}(phi_i*v_i)+sum_{j\in F}(ksi_j*n_j)
+    params:
+        query    (B,P,3)
+        vertices (B,N,3)
+        faces    (B,F,3)
+    return:
+        phi_i    (B,P,N)
+        ksi_j    (B,P,F)
+    """
+    B, F, _ = faces.shape
+    _, P, _ = query.shape
+    _, N, _ = vertices.shape
+    # (B,F,3)
+    n_tj = face_normals
+    if n_tj is None:
+        n_tj, _ = compute_face_normals_and_areas(vertices, faces)
+
+    # (B,N,3) (B,F,3) -> (B,F,3,3)
+    v_jl = torch.gather(vertices.unsqueeze(1).expand(-1,F,-1,-1), 2, faces.unsqueeze(-1).expand(-1,-1,-1,3))
+    # compute face normal
+
+    # v_jl = v_jl - x (B,P,F,3,3)
+    v_jlx = v_jl.unsqueeze(1) - query.unsqueeze(2)
+    # B,P,F,3
+    p = dot_product(v_jlx[:,:,:,0,:], n_tj.unsqueeze(1).expand(-1, P, -1, -1), dim=-1, keepdim=True)*n_tj
+    # B,P,F,3,3 -> B,P,F,3
+    s_l = torch.sign(dot_product(torch.cross(v_jlx-p.unsqueeze(-2), v_jlx[:,:,:,[1,2,0],:]-p.unsqueeze(-2)), n_tj.view(B,1,F,1,3)))
+    # (B,P,F,3)
+    I_l = _gcTriInt(p, v_jlx, v_jlx[:,:,:,[1,2,0],:], None)
+    II_l = _gcTriInt(torch.zeros_like(p), v_jlx, v_jlx[:,:,:,[1,2,0],:], None)
+    # (B,P,F,3,3)
+    q_l = torch.cross(v_jlx[:,:,:,[1,2,0],:], v_jlx)
+    N_l = normalize(q_l, dim=-1)
+    # (B,P,F)
+    I = -torch.abs(torch.sum(s_l*I_l, dim=-1))
+    ksi_j = -I
+    # (B,P,F,3) 3 as in 3D
+    omega = n_tj.unsqueeze(1)*I.unsqueeze(-1)+torch.sum(N_l*II_l.unsqueeze(-1), dim=-2)
+    epsilon = 1e-5
+    # (B,P,F,3)
+    phi_jl = torch.where(torch.norm(omega.unsqueeze(-2), dim=-1)>epsilon), dot_product(N_l[:,:,:,[1,2,0],:], omega.unsqueeze(-2), dim=-1)/dot_product(N_l[:,:,:,[1,2,0],:], v_jlx, dim=-1))
+    phi_i = scatter_add(phi_jl.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1), 2, out_size=(B,P,N))
+
+    return phi_i, ksi_j
+
+
+def _gcTriInt(p, v1, v2, x):
+    """
+    part of the gree coordinate 3D pseudo code
+    params:
+        p  (B,P,F,3)
+        v1 (B,P,F,3,3)
+        v2 (B,P,F,3,3)
+        x  (B,P,F,3)
+    return:
+        (B,P,F,3)
+    """
+    # (B,P,F,3,3)
+    p_v1 = p.unsqueeze(-2)-v1
+    v2_p = v2-p.unsqueeze(-2)
+    v2_v1 = v2-v1
+    # (B,P,F,3)
+    p_v1_norm = torch.norm(p_v1, dim=-1, p=2)
+    # (B,P,F,3)
+    c = dot_product(v2_v1, p_v1, dim=-1)/(p_v1_norm*torch.norm(v2_v1, dim=-1, p=2)+1e-10)
+    c = torch.where(c>=1, c-(c.detach()-(1-eps)), c) # numerical issues causing c out of range
+    c = torch.where(c<=-1, c-(c.detach()+(1-eps)), c) # numerical issues causing c out of range
+    alpha = torch.acos(c)
+    c = dot_product(-p_v1, v2_p, dim=-1)/(p_v1_norm*torch.norm(v2_p, dim=-1, p=2)+1e-10)
+    c = torch.where(c>=1, c-(c.detach()-(1-eps)), c) # numerical issues causing c out of range
+    c = torch.where(c<=-1, c-(c.detach()+(1-eps)), c) # numerical issues causing c out of range
+    beta = torch.acos(c)
+    # (B,P,F,3)
+    lambd = (p_v1_norm*torch.sin(alpha))**2
+    # c (B,P,F,1)
+    if x is not None:
+        c = torch.sum((p-x)*(p-x), dim=-1,keepdim=True)
+    else:
+        c = torch.sum(p*p, dim=-1,keepdim=True)
+    # theta in (pi-alpha, pi-alpha-beta)
+    # (B,P,F,3)
+    theta_1, theta_2 = PI - alpha, PI-alpha-beta
+    S_1, S_2 = torch.sin(theta_1), torch.sin(theta_2)
+    C_1, C_2 = torch.cos(theta_1), torch.cos(theta_2)
+    sqrt_c = torch.sqrt(c)
+    I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan(sqrt_c*C_1/torch.sqrt(lambd+S_1*S_1*c))+
+                              torch.sqrt(lambd)*torch.log(2*torch.sqrt(lambd)*S_1*S_1/((1-C_1)*(1-C_1)+1e-10)*(1-2*c*C_1/(c*(1+C_1)+lambd+torch.sqrt(lambd*lambd+lambd*c*S_1)))))
+    I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan(sqrt_c*C_2/torch.sqrt(lambd+S_2*S_2*c))+
+                              torch.sqrt(lambd)*torch.log(2*torch.sqrt(lambd)*S_2*S_2/((1-C_2)*(1-C_2)+1e-10)*(1-2*c*C_2/(c*(1+C_2)+lambd+torch.sqrt(lambd*lambd+lambd*c*S_2)))))
+    return -1/4/PI*torch.abs(I_1-I_2-sqrt_c*beta)
 
 
 def dihedral_angle(vertices: torch.Tensor, edge_points: torch.Tensor):
