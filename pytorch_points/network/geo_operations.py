@@ -620,6 +620,7 @@ def get_normals(vertices: torch.Tensor, edge_points: torch.Tensor, side: int):
 def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False):
     """
     Lipman et.al. sum_{i\in N}(phi_i*v_i)+sum_{j\in F}(psi_j*n_j)
+    http://www.wisdom.weizmann.ac.il/~ylipman/GC/CageMesh_GreenCoords.cpp
     params:
         query    (B,P,D), D=3
         vertices (B,N,D), D=3
@@ -649,30 +650,34 @@ def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False
     # (B,P,F,3)
     I_l = _gcTriInt(p, v_jl, v_jl[:,:,:,[1,2,0],:], None)
     II_l = _gcTriInt(torch.zeros_like(p), v_jl[:,:,:,[1,2,0], :], v_jl, None)
-    # (B,P,F,3,D)
-    N_l = normalize(torch.cross(v_jl[:,:,:,[1,2,0],:], v_jl), dim=-1)
     # (B,P,F)
     I = -torch.abs(torch.sum(s_l*I_l, dim=-1))
-    psi_j = -I
-    assert(check_values(psi_j))
+    GC_face = -I
+    # (B,P,F,3,D)
+    assert(check_values(GC_face))
+    N_l = torch.cross(v_jl[:,:,:,[1,2,0],:], v_jl)
+    N_l_norm = torch.norm(N_l, dim=-1)
+    II_l = torch.where(N_l_norm<1e-7, torch.zeros_like(II_l), II_l)
+    N_l = torch.where(N_l_norm.unsqueeze(-1)>1e-7, N_l/N_l_norm.unsqueeze(-1), N_l)
     # (B,P,F,D)
     omega = n_tj.unsqueeze(1)*I.unsqueeze(-1)+torch.sum(N_l*II_l.unsqueeze(-1), dim=-2)
     eps = 1e-5
     # (B,P,F,3)
-    phi_jl = dot_product(N_l[:,:,:,[1,2,0],:], omega.unsqueeze(-2), dim=-1)/dot_product(N_l[:,:,:,[1,2,0],:], v_jl, dim=-1)
-    phi_jl = torch.where(torch.norm(omega.unsqueeze(-2), dim=-1)>eps, phi_jl, torch.zeros_like(phi_jl))
+    phi_jl = dot_product(N_l[:,:,:,[1,2,0],:], omega.unsqueeze(-2), dim=-1)/(dot_product(N_l[:,:,:,[1,2,0],:], v_jl, dim=-1)+eps)
+    # on the same plane don't contribute to phi
+    phi_jl = torch.where(torch.norm(omega.unsqueeze(-2), dim=-1)<eps, torch.zeros_like(phi_jl), phi_jl)
     # sum per face weights to per vertex weights
-    phi_i = scatter_add(phi_jl.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1).reshape(B,P,-1), 2, out_size=(B,P,N))
-    assert(check_values(phi_i))
-    # check inside, set to zero?
-    # coord_v_sum = torch.sum(phi_i, dim=2)
-    # insideCage = coord_v_sum >= 0.5
-    # # (B,P,F)
-    # phi_i = torch.where(insideCage.unsqueeze(-1), phi_i, torch.zeros_like(phi_i))
+    GC_vertex = scatter_add(phi_jl.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1).reshape(B,P,-1), 2, out_size=(B,P,N))
+    assert(check_values(GC_vertex))
+
+    # NOTE the point is inside the face, remember factor 2
+    # insideFace = (torch.norm(omega,dim=-1)<1e-5)&torch.all(s_l>0,dim=-1)
+    # phi_jl = torch.where(insideFace.unsqueeze(-1), phi_jl, torch.zeros_like(phi_jl))
+
     # normalize
-    sumPhi = torch.sum(phi_i, dim=2, keepdim=True)
-    phi_i /= (1e-10+sumPhi)
-    return phi_i, psi_j
+    GC_vertex = GC_vertex/(torch.sum(GC_vertex, dim=2, keepdim=True)+eps)
+
+    return GC_vertex, GC_face
 
 
 def _gcTriInt(p, v1, v2, x):
@@ -715,6 +720,7 @@ def _gcTriInt(p, v1, v2, x):
         c = torch.sum(p*p, dim=-1,keepdim=True)
     # theta in (pi-alpha, pi-alpha-beta)
     # (B,P,F,3)
+    invalid_values = (tempval1.abs()>(1-eps))|(tempval2.abs()>(1-eps))|(torch.abs(alpha-np.pi)<eps)|(torch.abs(alpha)<eps)
     theta_1 = np.pi - alpha
     theta_2 = torch.clamp(theta_1 - beta, -np.pi, np.pi)
 
@@ -722,16 +728,21 @@ def _gcTriInt(p, v1, v2, x):
     C_1, C_2 = torch.cos(theta_1), torch.cos(theta_2)
     sqrt_c = torch.sqrt(c)
     sqrt_lmbd = torch.sqrt(lambd)
+    theta_half = theta_1/2
+    cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/torch.tan(theta_half))
+    theta_half = theta_2/2
+    cot_2 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/torch.tan(theta_half))
     # I=-0.5*Sign(sx)* ( 2*sqrtc*atan((sqrtc*cx) / (sqrt(a+c*sx*sx) ) )+
     #                 sqrta*log(((sqrta*(1-2*c*cx/(c*(1+cx)+a+sqrta*sqrt(a+c*sx*sx)))))*(2*sx*sx/pow((1-cx),2))))
-    I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan(sqrt_c*C_1/torch.sqrt(lambd+S_1*S_1*c))+
-                              sqrt_lmbd*torch.log(sqrt_lmbd*(1-2*c*C_1/(c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1))*2*S_1*S_1/((1-C_1)**2+eps))))
-    I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan(sqrt_c*C_2/torch.sqrt(lambd+S_2*S_2*c))+
-                              sqrt_lmbd*torch.log(sqrt_lmbd*(1-2*c*C_2/(c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2))*2*S_2*S_2/((1-C_2)**2+eps))))
-
+    # assign a value to invalid entries, backward
+    inLog = torch.where(invalid_values|(lambd==0), torch.ones_like(theta_1), eps+sqrt_lmbd*(1-2*c*C_1/( eps+c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1)+eps) )*2*cot_1)
+    I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan((sqrt_c*C_1) / (eps+torch.sqrt(lambd+S_1*S_1*c) ) )+sqrt_lmbd*torch.log(inLog.abs()+eps))
+    assert(check_values(I_1))
+    inLog = torch.where(invalid_values|(lambd==0), torch.ones_like(theta_2), eps+sqrt_lmbd*(1-2*c*C_2/( eps+c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2)+eps) )*2*cot_2)
+    I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan((sqrt_c*C_2) / (eps+torch.sqrt(lambd+S_2*S_2*c) ) )+sqrt_lmbd*torch.log(inLog.abs()+eps))
+    assert(check_values(I_2))
     myInt = -1/4/np.pi*torch.abs(I_1-I_2-sqrt_c*beta)
-    myInt = torch.where((tempval1.abs()>1-eps)|(tempval2.abs()>1-eps)|
-                        (torch.abs(alpha-np.pi)<eps)|(torch.abs(alpha)<eps),
+    myInt = torch.where(invalid_values,
                         torch.zeros_like(myInt), myInt)
     return myInt
 
