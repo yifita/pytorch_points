@@ -3,6 +3,7 @@ from .._ext import sampling
 from .._ext import linalg
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
 from .operations import batch_svd, normalize, dot_product, scatter_add
+import numpy as np
 
 PI = 3.1415927
 
@@ -618,50 +619,60 @@ def get_normals(vertices: torch.Tensor, edge_points: torch.Tensor, side: int):
 # def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
 def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False):
     """
-    Lipman et.al. sum_{i\in N}(phi_i*v_i)+sum_{j\in F}(ksi_j*n_j)
+    Lipman et.al. sum_{i\in N}(phi_i*v_i)+sum_{j\in F}(psi_j*n_j)
     params:
-        query    (B,P,3)
-        vertices (B,N,3)
+        query    (B,P,D), D=3
+        vertices (B,N,D), D=3
         faces    (B,F,3)
     return:
         phi_i    (B,P,N)
-        ksi_j    (B,P,F)
+        psi_j    (B,P,F)
     """
     B, F, _ = faces.shape
-    _, P, _ = query.shape
-    _, N, _ = vertices.shape
-    # (B,F,3)
+    _, P, D = query.shape
+    _, N, D = vertices.shape
+    # (B,F,D)
     n_tj = face_normals
     if n_tj is None:
+        # compute face normal
         n_tj, _ = compute_face_normals_and_areas(vertices, faces)
 
-    # (B,N,3) (B,F,3) -> (B,F,3,3)
+    # (B,N,D) (B,F,3) -> (B,F,3,3) face points
     v_jl = torch.gather(vertices.unsqueeze(1).expand(-1,F,-1,-1), 2, faces.unsqueeze(-1).expand(-1,-1,-1,3))
-    # compute face normal
 
     # v_jl = v_jl - x (B,P,F,3,3)
-    v_jlx = v_jl.unsqueeze(1) - query.unsqueeze(2)
-    # B,P,F,3
-    p = dot_product(v_jlx[:,:,:,0,:], n_tj.unsqueeze(1).expand(-1, P, -1, -1), dim=-1, keepdim=True)*n_tj
-    # B,P,F,3,3 -> B,P,F,3
-    s_l = torch.sign(dot_product(torch.cross(v_jlx-p.unsqueeze(-2), v_jlx[:,:,:,[1,2,0],:]-p.unsqueeze(-2)), n_tj.view(B,1,F,1,3)))
+    v_jl = v_jl.view(B,1,F,3,3) - query.view(B,P,1,1,3)
+    # (B,P,F,D).(B,1,F,D) -> (B,P,F,1)*(B,P,F,D) projection of v1_x on the normal
+    p = dot_product(v_jl[:,:,:,0,:], n_tj.unsqueeze(1).expand(-1, P, -1, -1), dim=-1, keepdim=True)*n_tj.unsqueeze(1)
+    # B,P,F,3,D -> B,P,F,3
+    s_l = torch.sign(dot_product(torch.cross(v_jl-p.unsqueeze(-2), v_jl[:,:,:,[1,2,0],:]-p.unsqueeze(-2)), n_tj.view(B,1,F,1,D)))
     # (B,P,F,3)
-    I_l = _gcTriInt(p, v_jlx, v_jlx[:,:,:,[1,2,0],:], None)
-    II_l = _gcTriInt(torch.zeros_like(p), v_jlx, v_jlx[:,:,:,[1,2,0],:], None)
-    # (B,P,F,3,3)
-    q_l = torch.cross(v_jlx[:,:,:,[1,2,0],:], v_jlx)
-    N_l = normalize(q_l, dim=-1)
+    I_l = _gcTriInt(p, v_jl, v_jl[:,:,:,[1,2,0],:], None)
+    II_l = _gcTriInt(torch.zeros_like(p), v_jl[:,:,:,[1,2,0], :], v_jl, None)
+    # (B,P,F,3,D)
+    N_l = normalize(torch.cross(v_jl[:,:,:,[1,2,0],:], v_jl), dim=-1)
     # (B,P,F)
     I = -torch.abs(torch.sum(s_l*I_l, dim=-1))
-    ksi_j = -I
-    # (B,P,F,3) 3 as in 3D
+    psi_j = -I
+    assert(check_values(psi_j))
+    # (B,P,F,D)
     omega = n_tj.unsqueeze(1)*I.unsqueeze(-1)+torch.sum(N_l*II_l.unsqueeze(-1), dim=-2)
-    epsilon = 1e-5
+    eps = 1e-5
     # (B,P,F,3)
-    phi_jl = torch.where(torch.norm(omega.unsqueeze(-2), dim=-1)>epsilon), dot_product(N_l[:,:,:,[1,2,0],:], omega.unsqueeze(-2), dim=-1)/dot_product(N_l[:,:,:,[1,2,0],:], v_jlx, dim=-1))
-    phi_i = scatter_add(phi_jl.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1), 2, out_size=(B,P,N))
-
-    return phi_i, ksi_j
+    phi_jl = dot_product(N_l[:,:,:,[1,2,0],:], omega.unsqueeze(-2), dim=-1)/dot_product(N_l[:,:,:,[1,2,0],:], v_jl, dim=-1)
+    phi_jl = torch.where(torch.norm(omega.unsqueeze(-2), dim=-1)>eps, phi_jl, torch.zeros_like(phi_jl))
+    # sum per face weights to per vertex weights
+    phi_i = scatter_add(phi_jl.reshape(B,P,-1).contiguous(), faces.unsqueeze(1).expand(-1,P,-1,-1).reshape(B,P,-1), 2, out_size=(B,P,N))
+    assert(check_values(phi_i))
+    # check inside, set to zero?
+    # coord_v_sum = torch.sum(phi_i, dim=2)
+    # insideCage = coord_v_sum >= 0.5
+    # # (B,P,F)
+    # phi_i = torch.where(insideCage.unsqueeze(-1), phi_i, torch.zeros_like(phi_i))
+    # normalize
+    sumPhi = torch.sum(phi_i, dim=2, keepdim=True)
+    phi_i /= (1e-10+sumPhi)
+    return phi_i, psi_j
 
 
 def _gcTriInt(p, v1, v2, x):
@@ -682,14 +693,19 @@ def _gcTriInt(p, v1, v2, x):
     # (B,P,F,3)
     p_v1_norm = torch.norm(p_v1, dim=-1, p=2)
     # (B,P,F,3)
-    c = dot_product(v2_v1, p_v1, dim=-1)/(p_v1_norm*torch.norm(v2_v1, dim=-1, p=2)+1e-10)
-    c = torch.where(c>=1, c-(c.detach()-(1-eps)), c) # numerical issues causing c out of range
-    c = torch.where(c<=-1, c-(c.detach()+(1-eps)), c) # numerical issues causing c out of range
+    tempval1 = dot_product(v2_v1, p_v1, dim=-1)/(p_v1_norm*torch.norm(v2_v1, dim=-1, p=2)+1e-10)
+    # if (abs(tempval)>(1.0-0.00000000001))
+	# 	return 0.0
+    eps = 1e-10
+    c = torch.where(tempval1>=1, tempval1-(tempval1.detach()-(1-eps)), tempval1) # numeritempval1al issues tempval1ausing tempval1 out of range
+    c = torch.where(tempval1<=-1, tempval1-(tempval1.detach()+(1-eps)), c) # numeritempval1al issues tempval1ausing tempval1 out of range
     alpha = torch.acos(c)
-    c = dot_product(-p_v1, v2_p, dim=-1)/(p_v1_norm*torch.norm(v2_p, dim=-1, p=2)+1e-10)
-    c = torch.where(c>=1, c-(c.detach()-(1-eps)), c) # numerical issues causing c out of range
-    c = torch.where(c<=-1, c-(c.detach()+(1-eps)), c) # numerical issues causing c out of range
+    tempval2 = dot_product(-p_v1, v2_p, dim=-1)/(p_v1_norm*torch.norm(v2_p, dim=-1, p=2)+1e-10)
+    c = torch.where(tempval2>=1, tempval2-(tempval2.detach()-(1-eps)), tempval2) # numerical issues causing c out of range
+    c = torch.where(tempval2<=-1, tempval2-(tempval2.detach()+(1-eps)), c) # numerical issues causing c out of range
     beta = torch.acos(c)
+    assert(check_values(alpha))
+    assert(check_values(beta))
     # (B,P,F,3)
     lambd = (p_v1_norm*torch.sin(alpha))**2
     # c (B,P,F,1)
@@ -699,15 +715,26 @@ def _gcTriInt(p, v1, v2, x):
         c = torch.sum(p*p, dim=-1,keepdim=True)
     # theta in (pi-alpha, pi-alpha-beta)
     # (B,P,F,3)
-    theta_1, theta_2 = PI - alpha, PI-alpha-beta
+    theta_1 = np.pi - alpha
+    theta_2 = torch.clamp(theta_1 - beta, -np.pi, np.pi)
+
     S_1, S_2 = torch.sin(theta_1), torch.sin(theta_2)
     C_1, C_2 = torch.cos(theta_1), torch.cos(theta_2)
     sqrt_c = torch.sqrt(c)
+    sqrt_lmbd = torch.sqrt(lambd)
+    # I=-0.5*Sign(sx)* ( 2*sqrtc*atan((sqrtc*cx) / (sqrt(a+c*sx*sx) ) )+
+    #                 sqrta*log(((sqrta*(1-2*c*cx/(c*(1+cx)+a+sqrta*sqrt(a+c*sx*sx)))))*(2*sx*sx/pow((1-cx),2))))
     I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan(sqrt_c*C_1/torch.sqrt(lambd+S_1*S_1*c))+
-                              torch.sqrt(lambd)*torch.log(2*torch.sqrt(lambd)*S_1*S_1/((1-C_1)*(1-C_1)+1e-10)*(1-2*c*C_1/(c*(1+C_1)+lambd+torch.sqrt(lambd*lambd+lambd*c*S_1)))))
+                              sqrt_lmbd*torch.log(sqrt_lmbd*(1-2*c*C_1/(c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1))*2*S_1*S_1/((1-C_1)**2+eps))))
     I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan(sqrt_c*C_2/torch.sqrt(lambd+S_2*S_2*c))+
-                              torch.sqrt(lambd)*torch.log(2*torch.sqrt(lambd)*S_2*S_2/((1-C_2)*(1-C_2)+1e-10)*(1-2*c*C_2/(c*(1+C_2)+lambd+torch.sqrt(lambd*lambd+lambd*c*S_2)))))
-    return -1/4/PI*torch.abs(I_1-I_2-sqrt_c*beta)
+                              sqrt_lmbd*torch.log(sqrt_lmbd*(1-2*c*C_2/(c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2))*2*S_2*S_2/((1-C_2)**2+eps))))
+
+    myInt = -1/4/np.pi*torch.abs(I_1-I_2-sqrt_c*beta)
+    myInt = torch.where((tempval1.abs()>1-eps)|(tempval2.abs()>1-eps)|
+                        (torch.abs(alpha-np.pi)<eps)|(torch.abs(alpha)<eps),
+                        torch.zeros_like(myInt), myInt)
+    return myInt
+
 
 
 def dihedral_angle(vertices: torch.Tensor, edge_points: torch.Tensor):
