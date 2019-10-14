@@ -683,7 +683,7 @@ def green_coordinates_3D(query, vertices, faces, face_normals=None, verbose=Fals
     # normalize
     sumGC_V = torch.sum(GC_vertex, dim=2, keepdim=True)
 
-    exterior_flag = sumGC_V<0.5
+    exterior_flag = sumGC_V<0.1
 
     GC_vertex = GC_vertex/(sumGC_V+1e-10)
     # GC_vertex.masked_fill_(sumGC_V.abs()<eps, 0.0)
@@ -711,18 +711,18 @@ def _gcTriInt(p, v1, v2, x):
     p_v1_norm = torch.norm(p_v1, dim=-1, p=2)
     # (B,P,F,3)
     tempval = dot_product(v2_v1, p_v1, dim=-1)/(p_v1_norm*torch.norm(v2_v1, dim=-1, p=2)+1e-10)
-    tempval.clamp_(-1.0,1.0)
+    filter_mask = ((tempval-1).abs()<eps)
+    tempval.clamp_(-1.0+1e-6,1.0-1e-6)
     alpha = torch.acos(tempval)
-    filter_mask = (tempval.abs()>(1-eps))
     filter_mask = filter_mask | (torch.abs(alpha-np.pi)<1e-3)|(torch.abs(alpha)<1e-3)
     # tempval1.masked_fill_(tempval1>=1, tempval1-(tempval1.detach()-(1-eps)))
     # tempval1.masked_fill_(tempval1<=-1, tempval1-(tempval1.detach()+(1-eps)))
     # alpha = torch.acos(tempval1)
 
     tempval = dot_product(-p_v1, v2_p, dim=-1)/(p_v1_norm*torch.norm(v2_p, dim=-1, p=2)+1e-10)
-    tempval.clamp_(-1.0, 1.0)
+    filter_mask = filter_mask|(torch.abs(tempval-1)<eps)
+    tempval.clamp_(-1.0+1e-6, 1.0-1e-6)
     beta = torch.acos(tempval)
-    filter_mask = filter_mask|(tempval.abs()>(1-eps))
     assert(check_values(alpha))
     assert(check_values(beta))
     # (B,P,F,3)
@@ -734,13 +734,13 @@ def _gcTriInt(p, v1, v2, x):
         c = torch.sum(p*p, dim=-1,keepdim=True)
     # theta in (pi-alpha, pi-alpha-beta)
     # (B,P,F,3)
-    theta_1 = np.pi - alpha
-    theta_2 = torch.clamp(theta_1 - beta, -np.pi, np.pi)
+    theta_1 = torch.clamp(np.pi - alpha, 1e-8, np.pi-1e-8)
+    theta_2 = torch.clamp(theta_1 - beta, -np.pi+1e-8, np.pi-1e-8)
 
     S_1, S_2 = torch.sin(theta_1), torch.sin(theta_2)
     C_1, C_2 = torch.cos(theta_1), torch.cos(theta_2)
-    sqrt_c = torch.sqrt(c)
-    sqrt_lmbd = torch.sqrt(lambd)
+    sqrt_c = torch.sqrt(c+1e-10)
+    sqrt_lmbd = torch.sqrt(lambd+1e-10)
     theta_half = theta_1/2
     cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
     theta_half = theta_2/2
