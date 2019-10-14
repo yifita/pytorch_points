@@ -450,7 +450,7 @@ def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
     #     wi.register_hook(save_grad("mvc/dwi"))
     #     wj.register_hook(save_grad("mvc/dwj"))
     if verbose:
-        return wj_normalised, wi, si
+        return wj_normalised, wi
     else:
         return wj_normalised
 
@@ -620,7 +620,7 @@ def green_coordinates_2D(query, vertices, faces, edge_normals=None, verbose=Fals
     pass
 
 # def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
-def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False):
+def green_coordinates_3D(query, vertices, faces, face_normals=None, verbose=False):
     """
     Lipman et.al. sum_{i\in N}(phi_i*v_i)+sum_{j\in F}(psi_j*n_j)
     http://www.wisdom.weizmann.ac.il/~ylipman/GC/CageMesh_GreenCoords.cpp
@@ -631,6 +631,7 @@ def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False
     return:
         phi_i    (B,P,N)
         psi_j    (B,P,F)
+        exterior_flag (B,P)
     """
     B, F, _ = faces.shape
     _, P, D = query.shape
@@ -682,10 +683,12 @@ def green_coordintes_3D(query, vertices, faces, face_normals=None, verbose=False
     # normalize
     sumGC_V = torch.sum(GC_vertex, dim=2, keepdim=True)
 
+    exterior_flag = sumGC_V<0.5
+
     GC_vertex = GC_vertex/(sumGC_V+1e-10)
     # GC_vertex.masked_fill_(sumGC_V.abs()<eps, 0.0)
 
-    return GC_vertex, GC_face
+    return GC_vertex, GC_face, exterior_flag
 
 
 def _gcTriInt(p, v1, v2, x):
@@ -739,20 +742,20 @@ def _gcTriInt(p, v1, v2, x):
     sqrt_c = torch.sqrt(c)
     sqrt_lmbd = torch.sqrt(lambd)
     theta_half = theta_1/2
-    cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/torch.tan(theta_half))
+    cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
     theta_half = theta_2/2
-    cot_2 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/torch.tan(theta_half))
+    cot_2 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
     # I=-0.5*Sign(sx)* ( 2*sqrtc*atan((sqrtc*cx) / (sqrt(a+c*sx*sx) ) )+
     #                 sqrta*log(((sqrta*(1-2*c*cx/(c*(1+cx)+a+sqrta*sqrt(a+c*sx*sx)))))*(2*sx*sx/pow((1-cx),2))))
     # assign a value to invalid entries, backward
-    inLog = sqrt_lmbd*(1-2*c*C_1/( 1e-10 +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1) ) )*2*cot_1
+    inLog = sqrt_lmbd*(1-2*c*C_1/( 1e-10 +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1+1e-10) ) )*2*cot_1
     inLog.masked_fill_(filter_mask | (inLog<=0), 1.0)
     # inLog = torch.where(invalid_values|(lambd==0), torch.ones_like(theta_1), 1e-10 +sqrt_lmbd*(1-2*c*C_1/( 1e-10 +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1)+1e-10 ) )*2*cot_1)
-    I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan((sqrt_c*C_1) / (1e-10 +torch.sqrt(lambd+S_1*S_1*c) ) )+sqrt_lmbd*torch.log(inLog))
+    I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan((sqrt_c*C_1) / (1e-10 +torch.sqrt(lambd+S_1*S_1*c+1e-10) ) )+sqrt_lmbd*torch.log(inLog))
     assert(check_values(I_1))
-    inLog = sqrt_lmbd*(1-2*c*C_2/( 1e-10 +c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2) ) )*2*cot_2
+    inLog = sqrt_lmbd*(1-2*c*C_2/( 1e-10 +c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2+1e-10) ) )*2*cot_2
     inLog.masked_fill_(filter_mask | (inLog<=0), 1.0)
-    I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan((sqrt_c*C_2) / (1e-10 +torch.sqrt(lambd+S_2*S_2*c) ) )+sqrt_lmbd*torch.log(inLog))
+    I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan((sqrt_c*C_2) / (1e-10 +torch.sqrt(lambd+S_2*S_2*c+1e-10) ) )+sqrt_lmbd*torch.log(inLog))
     assert(check_values(I_2))
     myInt = -1/(4*np.pi)*torch.abs(I_1-I_2-sqrt_c*beta)
     myInt.masked_fill_(filter_mask, 0.0)
