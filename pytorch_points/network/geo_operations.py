@@ -652,6 +652,7 @@ def green_coordinates_3D(query, vertices, faces, face_normals=None, verbose=Fals
 
     # B,P,F,3,D -> B,P,F,3
     s_l = torch.sign(dot_product(torch.cross(v_jl-p.unsqueeze(-2), v_jl[:,:,:,[1,2,0],:]-p.unsqueeze(-2), dim=-1), n_t.view(B,1,F,1,D)))
+    # import pdb; pdb.set_trace()
     # (B,P,F,3)
     I_l = _gcTriInt(p, v_jl, v_jl[:,:,:,[1,2,0],:], None)
     # (B,P,F)
@@ -667,7 +668,7 @@ def green_coordinates_3D(query, vertices, faces, face_normals=None, verbose=Fals
     N_l = torch.where((N_l_norm>1e-7).unsqueeze(-1), N_l/N_l_norm.unsqueeze(-1), N_l)
     # (B,P,F,D)
     omega = n_t.unsqueeze(1)*I.unsqueeze(-1)+torch.sum(N_l*II_l.unsqueeze(-1), dim=-2)
-    eps = 1e-3
+    eps = 1e-6
     # (B,P,F,3)
     phi_jl = dot_product(N_l[:,:,:,[1,2,0],:], omega.unsqueeze(-2), dim=-1)/(dot_product(N_l[:,:,:,[1,2,0],:], v_jl, dim=-1)+1e-10)
     # on the same plane don't contribute to phi
@@ -683,7 +684,7 @@ def green_coordinates_3D(query, vertices, faces, face_normals=None, verbose=Fals
     # normalize
     sumGC_V = torch.sum(GC_vertex, dim=2, keepdim=True)
 
-    exterior_flag = sumGC_V<0.1
+    exterior_flag = sumGC_V<0.5
 
     GC_vertex = GC_vertex/(sumGC_V+1e-10)
     # GC_vertex.masked_fill_(sumGC_V.abs()<eps, 0.0)
@@ -703,6 +704,8 @@ def _gcTriInt(p, v1, v2, x):
         (B,P,F,3)
     """
     eps = 1e-6
+    angle_eps = 1e-3
+    div_guard = 1e-12
     # (B,P,F,3,D)
     p_v1 = p.unsqueeze(-2)-v1
     v2_p = v2-p.unsqueeze(-2)
@@ -710,18 +713,17 @@ def _gcTriInt(p, v1, v2, x):
     # (B,P,F,3)
     p_v1_norm = torch.norm(p_v1, dim=-1, p=2)
     # (B,P,F,3)
-    tempval = dot_product(v2_v1, p_v1, dim=-1)/(p_v1_norm*torch.norm(v2_v1, dim=-1, p=2)+1e-10)
-    filter_mask = ((tempval-1).abs()<eps)
-    tempval.clamp_(-1.0+1e-6,1.0-1e-6)
+    tempval = dot_product(v2_v1, p_v1, dim=-1)/(p_v1_norm*torch.norm(v2_v1, dim=-1, p=2)+div_guard)
+    tempval.clamp_(-1.0,1.0)
+    filter_mask = tempval.abs()>(1-eps)
+    tempval.clamp_(-1.0+eps,1.0-eps)
     alpha = torch.acos(tempval)
-    filter_mask = filter_mask | (torch.abs(alpha-np.pi)<1e-3)|(torch.abs(alpha)<1e-3)
-    # tempval1.masked_fill_(tempval1>=1, tempval1-(tempval1.detach()-(1-eps)))
-    # tempval1.masked_fill_(tempval1<=-1, tempval1-(tempval1.detach()+(1-eps)))
-    # alpha = torch.acos(tempval1)
+    filter_mask = filter_mask | (torch.abs(alpha-np.pi)<angle_eps)|(torch.abs(alpha)<angle_eps)
 
-    tempval = dot_product(-p_v1, v2_p, dim=-1)/(p_v1_norm*torch.norm(v2_p, dim=-1, p=2)+1e-10)
-    filter_mask = filter_mask|(torch.abs(tempval-1)<eps)
-    tempval.clamp_(-1.0+1e-6, 1.0-1e-6)
+    tempval = dot_product(-p_v1, v2_p, dim=-1)/(p_v1_norm*torch.norm(v2_p, dim=-1, p=2)+div_guard)
+    tempval.clamp_(-1.0, 1.0)
+    filter_mask = filter_mask|(torch.abs(tempval)>(1-eps))
+    tempval.clamp_(-1.0+eps,1.0-eps)
     beta = torch.acos(tempval)
     assert(check_values(alpha))
     assert(check_values(beta))
@@ -734,28 +736,32 @@ def _gcTriInt(p, v1, v2, x):
         c = torch.sum(p*p, dim=-1,keepdim=True)
     # theta in (pi-alpha, pi-alpha-beta)
     # (B,P,F,3)
-    theta_1 = torch.clamp(np.pi - alpha, 1e-8, np.pi-1e-8)
-    theta_2 = torch.clamp(theta_1 - beta, -np.pi+1e-8, np.pi-1e-8)
+    theta_1 = np.pi - alpha
+    theta_2 = np.pi - alpha - beta
 
     S_1, S_2 = torch.sin(theta_1), torch.sin(theta_2)
     C_1, C_2 = torch.cos(theta_1), torch.cos(theta_2)
-    sqrt_c = torch.sqrt(c+1e-10)
-    sqrt_lmbd = torch.sqrt(lambd+1e-10)
-    theta_half = theta_1/2
-    cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
-    theta_half = theta_2/2
-    cot_2 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
+    sqrt_c = torch.sqrt(c+div_guard)
+    sqrt_lmbd = torch.sqrt(lambd+div_guard)
+    # theta_half = theta_1/2
+    # cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
+    filter_mask = filter_mask | ((C_1-1).abs()<eps)
+    sqcot_1 = torch.where((C_1-1).abs()<eps, torch.zeros_like(C_1), S_1*S_1/((1-C_1)**2+div_guard))
+    # theta_half = theta_2/2
+    # cot_2 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+div_guard))
+    filter_mask = filter_mask | ((C_2-1).abs()<eps)
+    sqcot_2 = torch.where((C_2-1).abs()<eps, torch.zeros_like(C_2), S_2*S_2/((1-C_2)**2+div_guard))
     # I=-0.5*Sign(sx)* ( 2*sqrtc*atan((sqrtc*cx) / (sqrt(a+c*sx*sx) ) )+
     #                 sqrta*log(((sqrta*(1-2*c*cx/(c*(1+cx)+a+sqrta*sqrt(a+c*sx*sx)))))*(2*sx*sx/pow((1-cx),2))))
     # assign a value to invalid entries, backward
-    inLog = sqrt_lmbd*(1-2*c*C_1/( 1e-10 +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1+1e-10) ) )*2*cot_1
+    inLog = sqrt_lmbd*(1-2*c*C_1/( div_guard +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1+div_guard) ) )*2*sqcot_1
     inLog.masked_fill_(filter_mask | (inLog<=0), 1.0)
-    # inLog = torch.where(invalid_values|(lambd==0), torch.ones_like(theta_1), 1e-10 +sqrt_lmbd*(1-2*c*C_1/( 1e-10 +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1)+1e-10 ) )*2*cot_1)
-    I_1 = -torch.sign(S_1)/2*(2*sqrt_c*torch.atan((sqrt_c*C_1) / (1e-10 +torch.sqrt(lambd+S_1*S_1*c+1e-10) ) )+sqrt_lmbd*torch.log(inLog))
+    # inLog = torch.where(invalid_values|(lambd==0), torch.ones_like(theta_1), div_guard +sqrt_lmbd*(1-2*c*C_1/( div_guard +c*(1+C_1)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_1*S_1)+div_guard ) )*2*cot_1)
+    I_1 = -0.5*torch.sign(S_1)*(2*sqrt_c*torch.atan((sqrt_c*C_1) / (torch.sqrt(lambd+S_1*S_1*c+div_guard) ) )+sqrt_lmbd*torch.log(inLog))
     assert(check_values(I_1))
-    inLog = sqrt_lmbd*(1-2*c*C_2/( 1e-10 +c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2+1e-10) ) )*2*cot_2
+    inLog = sqrt_lmbd*(1-2*c*C_2/( div_guard +c*(1+C_2)+lambd+sqrt_lmbd*torch.sqrt(lambd+c*S_2*S_2+div_guard) ) )*2*sqcot_2
     inLog.masked_fill_(filter_mask | (inLog<=0), 1.0)
-    I_2 = -torch.sign(S_2)/2*(2*sqrt_c*torch.atan((sqrt_c*C_2) / (1e-10 +torch.sqrt(lambd+S_2*S_2*c+1e-10) ) )+sqrt_lmbd*torch.log(inLog))
+    I_2 = -0.5*torch.sign(S_2)*(2*sqrt_c*torch.atan((sqrt_c*C_2) / (torch.sqrt(lambd+S_2*S_2*c+div_guard) ) )+sqrt_lmbd*torch.log(inLog))
     assert(check_values(I_2))
     myInt = -1/(4*np.pi)*torch.abs(I_1-I_2-sqrt_c*beta)
     myInt.masked_fill_(filter_mask, 0.0)
