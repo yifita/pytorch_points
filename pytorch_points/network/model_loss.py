@@ -290,35 +290,6 @@ class SimpleMeshRepulsionLoss(MeshStretchLoss):
 
         return loss
 
-
-class MeshDihedralAngleLoss(torch.nn.Module):
-    """
-    vert1           (B,N,3)
-    vert2           (B,N,3)
-    edge_points     List(torch.Tensor(E, 4))
-    """
-    def __init__(self, metric: torch.nn.Module, consistent_topology: bool=False):
-        super().__init__()
-        self.metric = metric
-        self.consistent_topology = consistent_topology
-        # List(Ex4)
-        self.edge_points = None
-
-    def forward(self, vert1, vert2, edge_points):
-        B = vert1.shape[0]
-        loss = []
-        for b in range(B):
-            angles1 = geo_op.dihedral_angle(vert1[b], edge_points[b])
-            angles2 = geo_op.dihedral_angle(vert2[b], edge_points[b])
-            tmp = self.metric(angles1, angles2)
-            loss.append(tmp)
-
-        loss = torch.stack(loss, dim=0)
-        if self.reduction != "none":
-            loss = loss.mean()
-
-        return loss
-
 class SmapeLoss(torch.nn.Module):
     """
     relative L1 norm

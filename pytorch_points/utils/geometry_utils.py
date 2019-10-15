@@ -10,7 +10,7 @@ from matplotlib import cm
 import torch
 from collections import abc
 from ..network.geo_operations import compute_face_normals_and_areas
-
+from ..misc import logger
 
 def read_trimesh(filename, return_mesh=False, **kwargs):
     """
@@ -187,7 +187,13 @@ class Mesh(abc.Mapping):
         self.vn = None
         self.fn = None
 
-        if filepath is not None:
+        if (self.vs is not None and self.fs is not None):
+            if filepath is not None:
+                logger.warn("Using provided vertices and faces, ignore filepath")
+            assert(self.vs.ndim == 2 and self.fs.ndim ==2)
+            assert(self.vs.shape[-1] == 3)
+            assert(self.fs.shape[-1] == 3)
+        elif filepath is not None:
             mesh = om.read_trimesh(filepath)
             self.vs = torch.from_numpy(mesh.points()).to(dtype=torch.float32)
 
@@ -203,6 +209,8 @@ class Mesh(abc.Mapping):
             f_normals = mesh.face_normals()
             self.vn = torch.from_numpy(v_normals.astype(np.float32))
             self.fn = torch.from_numpy(f_normals.astype(np.float32))
+        else:
+            logger.error("[{}] Must provide a mesh".format(__class__))
 
         # build_gemm(self, self.fs)
         self.farea = compute_face_normals_and_areas(self.vs, self.fs)
@@ -238,6 +246,7 @@ def build_gemm(mesh, faces):
         for i in range(3):
             cur_edge = (face[i], face[(i + 1) % 3])
             faces_edges.append(cur_edge)
+
         for idx, edge in enumerate(faces_edges):
             edge = tuple(sorted(list(edge)))
             faces_edges[idx] = edge
