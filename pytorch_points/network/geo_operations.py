@@ -642,6 +642,7 @@ def green_coordinates_3D(query, vertices, faces, face_normals=None, verbose=Fals
         # compute face normal
         n_t, _ = compute_face_normals_and_areas(vertices, faces)
 
+    vertices = vertices.detach()
     # (B,N,D) (B,F,3) -> (B,F,3,3) face points
     v_jl = torch.gather(vertices.unsqueeze(1).expand(-1,F,-1,-1), 2, faces.unsqueeze(-1).expand(-1,-1,-1,3))
 
@@ -736,21 +737,21 @@ def _gcTriInt(p, v1, v2, x):
         c = torch.sum(p*p, dim=-1,keepdim=True)
     # theta in (pi-alpha, pi-alpha-beta)
     # (B,P,F,3)
-    theta_1 = np.pi - alpha
-    theta_2 = np.pi - alpha - beta
+    theta_1 = torch.clamp(np.pi - alpha, 0, np.pi)
+    theta_2 = torch.clamp(np.pi - alpha - beta, -np.pi, np.pi)
 
     S_1, S_2 = torch.sin(theta_1), torch.sin(theta_2)
     C_1, C_2 = torch.cos(theta_1), torch.cos(theta_2)
     sqrt_c = torch.sqrt(c+div_guard)
     sqrt_lmbd = torch.sqrt(lambd+div_guard)
-    # theta_half = theta_1/2
-    # cot_1 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+1e-10))
+    theta_half = theta_1/2
     filter_mask = filter_mask | ((C_1-1).abs()<eps)
     sqcot_1 = torch.where((C_1-1).abs()<eps, torch.zeros_like(C_1), S_1*S_1/((1-C_1)**2+div_guard))
-    # theta_half = theta_2/2
-    # cot_2 = torch.where(theta_half.abs()<eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)+div_guard))
+    # sqcot_1 = torch.where(theta_half.abs()<angle_eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)**2+div_guard))
+    theta_half = theta_2/2
     filter_mask = filter_mask | ((C_2-1).abs()<eps)
     sqcot_2 = torch.where((C_2-1).abs()<eps, torch.zeros_like(C_2), S_2*S_2/((1-C_2)**2+div_guard))
+    # sqcot_2 = torch.where(theta_half.abs()<angle_eps, torch.zeros_like(theta_half), 1/(torch.tan(theta_half)**2+div_guard))
     # I=-0.5*Sign(sx)* ( 2*sqrtc*atan((sqrtc*cx) / (sqrt(a+c*sx*sx) ) )+
     #                 sqrta*log(((sqrta*(1-2*c*cx/(c*(1+cx)+a+sqrta*sqrt(a+c*sx*sx)))))*(2*sx*sx/pow((1-cx),2))))
     # assign a value to invalid entries, backward
@@ -781,6 +782,6 @@ def dihedral_angle(vertices: torch.Tensor, edge_points: torch.Tensor):
     """
     normals_a = get_normals(vertices, edge_points, 0)
     normals_b = get_normals(vertices, edge_points, 3)
-    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1, 1)
+    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1+1e-6, 1-1e-7)
     angles = PI - torch.acos(dot)
     return angles

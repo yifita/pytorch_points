@@ -6,6 +6,7 @@ import numpy as np
 import torch
 # Point cloud IO
 from matplotlib import cm
+import matplotlib.colors as mpc
 import plyfile
 
 
@@ -339,17 +340,23 @@ def save_ply(points, filename, colors=None, normals=None, binary=True):
     ply.write(filename)
 
 
-def save_ply_property(points, property, filename, property_max=None, normals=None, cmap_name='Set1', binary=True):
+def save_ply_property(points, property, filename, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
     point_num = points.shape[0]
     colors = np.full([point_num, 3], 0.5)
     cmap = cm.get_cmap(cmap_name)
     if property_max is None:
         property_max = np.amax(property, axis=0)
-    for point_idx in range(point_num):
-        colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
+    if property_min is None:
+        property_min = np.amin(property, axis=0)
+    p_range = property_max-property_min
+    if property_max == property_min:
+        property_max = property_min+1
+    normalizer = mpc.Normalize(vmin=property_min, vmax=property_max)
+    p = normalizer(property)
+    colors = cmap(p)[:,:3]
     save_ply(points, filename, colors, normals, binary)
 
-""" 
+"""
 augmentation operations for a point cloud (TODO: extend to batches of point clouds)
 https://github.com/ThibaultGROUEIX/CycleConsistentDeformation/blob/master/auxiliary/normalize_points.py
 """

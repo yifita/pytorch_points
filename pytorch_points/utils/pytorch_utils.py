@@ -56,7 +56,7 @@ def save_network(net, directory, network_label, epoch_label=None, **kwargs):
     save_filename = "_".join((network_label, str(epoch_label))) + ".pth"
     save_path = os.path.join(directory, save_filename)
     merge_states = OrderedDict()
-    merge_states['states'] = net.cpu().state_dict()
+    merge_states["states"] = net.cpu().state_dict()
     for k in kwargs:
         merge_states[k] = kwargs[k]
     torch.save(merge_states, save_path)
@@ -73,8 +73,12 @@ def load_network(net, path):
     logger.info("loading network from {}".format(path))
     if path[-3:] == "pth":
         loaded_state = torch.load(path)
+        if "states" in loaded_state:
+            loaded_state = loaded_state["states"]
     else:
         loaded_state = np.load(path).item()
+        if "states" in loaded_state:
+            loaded_state = loaded_state["states"]
 
     network = net.module if isinstance(
         net, torch.nn.DataParallel) else net
