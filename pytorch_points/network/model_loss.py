@@ -249,25 +249,24 @@ class MeshStretchLoss(torch.nn.Module):
         return loss
 
 
-class SimpleMeshRepulsionLoss(MeshStretchLoss):
+class SimpleMeshRepulsionLoss(torch.nn.Module):
     """
-    Penalize very short mesh edges
+    Penalize very short mesh edges 1/d
     """
-    def __init__(self, threshold, reduction="mean", consistent_topology=False):
-        super().__init__(reduction=reduction, consistent_topology=consistent_topology)
+    def __init__(self, threshold, edges=None, reduction="mean", consistent_topology=False):
+        super().__init__()
         self.threshold2 = threshold*threshold
+        self.edges = edges
 
-    def forward(self, verts1, face=None):
+    def forward(self, verts1, edges=None):
         """
         verts1: (B, N, 3)
         faces:  (B, F, L)
         """
         B, P, _ = verts1.shape
-        F = face.shape[1]
-        if (not self.consistent_topology) or self.E is None:
-            assert(face is not None), "Face is required"
-            self.E = self.getEV(face, P)
-
+        if edges is None:
+            edges = self.edges
+        assert(edges is not None)
         # (B, E, 2, 3)
         loss = []
         for b in range(B):

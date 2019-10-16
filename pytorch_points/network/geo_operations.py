@@ -450,7 +450,7 @@ def mean_value_coordinates_3D(query, vertices, faces, verbose=False):
     #     wi.register_hook(save_grad("mvc/dwi"))
     #     wj.register_hook(save_grad("mvc/dwj"))
     if verbose:
-        return wj_normalised, wi
+        return wj_normalised, wj
     else:
         return wj_normalised
 
@@ -782,6 +782,6 @@ def dihedral_angle(vertices: torch.Tensor, edge_points: torch.Tensor):
     """
     normals_a = get_normals(vertices, edge_points, 0)
     normals_b = get_normals(vertices, edge_points, 3)
-    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1+1e-6, 1-1e-7)
+    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1+1e-6, 1-1e-6)
     angles = PI - torch.acos(dot)
     return angles

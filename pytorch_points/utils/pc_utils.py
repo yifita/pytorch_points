@@ -356,6 +356,14 @@ def save_ply_property(points, property, filename, property_max=None, property_mi
     colors = cmap(p)[:,:3]
     save_ply(points, filename, colors, normals, binary)
 
+def save_pts(filename, points, normals=None, labels=None):
+    assert(points.ndim==2)
+    if normals is not None:
+        points = np.concatenate([points, normals], axis=1)
+    if labels is not None:
+        points = np.concatenate([points, labels], axis=1)
+    np.savetxt(filename, points, fmt=["%.10e"]*points.shape[1]+["\"%i\""])
+
 """
 augmentation operations for a point cloud (TODO: extend to batches of point clouds)
 https://github.com/ThibaultGROUEIX/CycleConsistentDeformation/blob/master/auxiliary/normalize_points.py
@@ -441,3 +449,17 @@ def add_random_translation(points, scale=0.03):
     a = torch.FloatTensor(3)
     points[:, 0:3] = points[:, 0:3] + (a.uniform_(-1, 1) * scale).unsqueeze(0).expand(-1, 3)
     return points
+
+def random_sphere(batch, num_points):
+    """generate random samples on a uni-sphere (B,N,3)"""
+    # double theta = 2 * M_PI * uniform01(generator);
+    # double phi = M_PI * uniform01(generator);
+    # double x = sin(phi) * cos(theta);
+    # double y = sin(phi) * sin(theta);
+    # double z = cos(phi);
+    theta = np.random.rand(batch, num_points)*2*np.pi
+    phi = np.random.rand(batch, num_points)*np.pi
+    x = np.sin(phi)*np.cos(theta)
+    y = np.sin(phi)*np.sin(theta)
+    z = np.cos(phi)
+    return np.stack([x,y,z], axis=-1)
