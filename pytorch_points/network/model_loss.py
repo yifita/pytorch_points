@@ -261,7 +261,7 @@ class SimpleMeshRepulsionLoss(torch.nn.Module):
     def forward(self, verts1, edges=None):
         """
         verts1: (B, N, 3)
-        faces:  (B, F, L)
+        edges:  (B, E, 2)
         """
         B, P, _ = verts1.shape
         if edges is None:
@@ -270,7 +270,7 @@ class SimpleMeshRepulsionLoss(torch.nn.Module):
         # (B, E, 2, 3)
         loss = []
         for b in range(B):
-            edge_length1 = geo_op.get_edge_lengths(verts[b], self.E[b])
+            edge_length1 = geo_op.get_edge_lengths(verts[b], edges)
             tmp = 1/(edge_length1+1e-6)
             tmp = torch.where(edge_length1 < self.threshold2, tmp, torch.zeros_like(tmp))
             if self.reduction in ("mean", "none"):
