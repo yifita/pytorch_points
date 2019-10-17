@@ -257,13 +257,14 @@ class SimpleMeshRepulsionLoss(torch.nn.Module):
         super().__init__()
         self.threshold2 = threshold*threshold
         self.edges = edges
+        self.reduction = reduction
 
-    def forward(self, verts1, edges=None):
+    def forward(self, verts, edges=None):
         """
-        verts1: (B, N, 3)
+        verts: (B, N, 3)
         edges:  (B, E, 2)
         """
-        B, P, _ = verts1.shape
+        B, P, _ = verts.shape
         if edges is None:
             edges = self.edges
         assert(edges is not None)

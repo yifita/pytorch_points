@@ -782,6 +782,6 @@ def dihedral_angle(vertices: torch.Tensor, edge_points: torch.Tensor):
     """
     normals_a = get_normals(vertices, edge_points, 0)
     normals_b = get_normals(vertices, edge_points, 3)
-    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1+1e-6, 1-1e-7)
+    dot = dot_product(normals_a, normals_b, dim=-1).clamp(-1+1e-6, 1-1e-6)
     angles = PI - torch.acos(dot)
     return angles
