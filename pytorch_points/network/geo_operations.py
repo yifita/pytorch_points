@@ -546,7 +546,8 @@ def compute_face_normals_and_areas(vertices: torch.Tensor, faces: torch.Tensor):
     face_normals = torch.cross(face_vertices[:,:,1,:] - face_vertices[:,:,0,:],
                                face_vertices[:,:,2,:] - face_vertices[:,:,1,:], dim=-1)
     face_areas = face_normals.clone()
-    face_areas /= 4
+    face_areas = np.sqrt((face_areas ** 2).sum(dim=-1))
+    face_areas /= 2
     face_normals = normalize(face_normals, dim=-1)
     if ndim == 2:
         vertices.squeeze_(0)
