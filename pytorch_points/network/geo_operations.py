@@ -207,10 +207,16 @@ class UniformLaplacian(torch.nn.Module):
 
         if self.L is None:
             self.computeLaplacian(verts, faces)
-        verts = verts.reshape(-1, verts.shape[-1])
-        x = self.L.mm(verts)
-        x = x / (self.Lii.unsqueeze(-1)+1e-12)
-        x = x.reshape([batch, nv, -1])
+
+        if self.L.shape[0] != (verts.shape[0]*verts.shape[1]):
+            # during initialization, used a single batch point set
+            assert(self.L.shape[0] == verts.shape[1])
+            x = [torch.sparse.mm(self.L, verts[b])/(self.Lii.unsqueeze(-1)+1e-12) for b in range(batch)]
+            x = torch.stack(x, dim=0)
+        else:
+            x = torch.sparse.mm(self.L, verts.view(-1,3))
+            x = x / (self.Lii.unsqueeze(-1)+1e-12)
+            x = x.reshape([batch, nv, -1])
         return x
 
 #############
