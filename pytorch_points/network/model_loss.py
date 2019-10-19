@@ -55,7 +55,8 @@ class MeshLaplacianLoss(torch.nn.Module):
 
         if self.L is None or (not self.precompute_L):
             lap1 = self.laplacian(vert1, face)
-            lap1 = torch.norm(lap1, dim=-1, p=2)
+            if self.use_norm:
+                lap1 = torch.norm(lap1, dim=-1, p=2)
             if self.precompute_L:
                 self.L = lap1
         else:
