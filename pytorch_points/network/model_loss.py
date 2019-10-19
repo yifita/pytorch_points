@@ -53,7 +53,7 @@ class MeshLaplacianLoss(torch.nn.Module):
         if not self.consistent_topology:
             self.laplacian.L = None
 
-        if self.L is None or (not self.precompute_L)
+        if self.L is None or (not self.precompute_L):
             lap1 = self.laplacian(vert1, face)
             lap1 = torch.norm(lap1, dim=-1, p=2)
             if self.precompute_L:
@@ -67,6 +67,7 @@ class MeshLaplacianLoss(torch.nn.Module):
                 lap2 = torch.norm(lap2, dim=-1, p=2)
             return self.metric(lap1,lap2)
         else:
+            assert(~self.precompute_L), "precompute_L must be False"
             return lap1.mean()
 
 class PointLaplacianLoss(torch.nn.Module):
