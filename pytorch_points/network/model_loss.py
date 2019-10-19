@@ -33,8 +33,10 @@ class MeshLaplacianLoss(torch.nn.Module):
     metric: an instance of a module e.g. L1Loss
     use_cot: cot laplacian is used instead of uniformlaplacian
     consistent_topology: assume face matrix is the same during the entire use
+    precompute_L: assume vert1 is always the same
     """
-    def __init__(self, metric, use_cot=False, use_norm=False, consistent_topology=False):
+    def __init__(self, metric, use_cot=False, use_norm=False, consistent_topology=False,
+                 precompute_L=False):
         super().__init__()
         if use_cot:
             self.laplacian = geo_op.CotLaplacian()
@@ -44,14 +46,21 @@ class MeshLaplacianLoss(torch.nn.Module):
         self.use_norm = use_norm
         self.consistent_topology = consistent_topology
         self.metric = metric
+        self.precompute_L = precompute_L
+        self.L = None
 
     def forward(self, vert1, vert2=None, face=None):
         if not self.consistent_topology:
             self.laplacian.L = None
 
-        lap1 = self.laplacian(vert1, face)
-        if self.use_norm:
+        if self.L is None or (not self.precompute_L)
+            lap1 = self.laplacian(vert1, face)
             lap1 = torch.norm(lap1, dim=-1, p=2)
+            if self.precompute_L:
+                self.L = lap1
+        else:
+            lap1 = self.L
+
         if vert2 is not None:
             lap2 = self.laplacian(vert2, face)
             if self.use_norm:
