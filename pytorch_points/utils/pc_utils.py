@@ -64,6 +64,21 @@ def normalize_to_box(input):
 
     return input, centroid, furthest_distance
 
+def center_bounding_box(points):
+    # input : Numpy Tensor N_pts, D_dim
+    # ouput : Numpy Tensor N_pts, D_dim
+    # Center bounding box of first 3 dimensions
+    if isinstance(points, torch.Tensor):
+        min_vals = torch.min(points, 0)[0]
+        max_vals = torch.max(points, 0)[0]
+        points = points - (min_vals + max_vals) / 2
+        return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
+    elif isinstance(points, np.ndarray):
+        min_vals = np.min(points, 0)
+        max_vals = np.max(points, 0)
+        points = points - (min_vals + max_vals) / 2
+        return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
+
 
 def jitter_perturbation_point_cloud(batch_data, sigma=0.005, clip=0.02, is_2D=False):
     """
