@@ -83,27 +83,6 @@ def normalize_point_batch_to_sphere(pc: torch.Tensor, NCHW=True):
     pc = pc / furthest_distance
     return pc, centroid, furthest_distance
 
-def normalize_point_batch_to_box(pc: torch.Tensor, NCHW=True):
-    """
-    normalize a batch of point clouds
-    :param
-        pc      [B, N, 3] or [B, 3, N]
-        NCHW    if True, treat the second dimension as channel dimension
-    :return
-        pc      normalized point clouds, same shape as input
-        centroid [B, 1, 3] or [B, 3, 1] center of point clouds
-        furthest_distance [B, 1, 1] scale of point clouds
-    """
-    point_axis = 2 if NCHW else 1
-    dim_axis = 1 if NCHW else 2
-    minP = torch.min(pc, dim=point_axis, keepdim=True)[0]
-    maxP = torch.max(pc, dim=point_axis, keepdim=True)[0]
-    centroid = (minP+maxP)/2
-    pc = pc - centroid
-    furthest_distance = torch.abs(pc).max()
-    pc = pc / furthest_distance
-    return pc, centroid, furthest_distance
-
 
 def batch_normals(points, base=None, nn_size=20, NCHW=True):
     """
@@ -214,7 +193,7 @@ class UniformLaplacian(torch.nn.Module):
             x = [torch.sparse.mm(self.L, verts[b])/(self.Lii.unsqueeze(-1)+1e-12) for b in range(batch)]
             x = torch.stack(x, dim=0)
         else:
-            x = torch.sparse.mm(self.L, verts.view(-1,3))
+            x = torch.sparse.mm(self.L, verts.reshape(-1,3))
             x = x / (self.Lii.unsqueeze(-1)+1e-12)
             x = x.reshape([batch, nv, -1])
         return x
