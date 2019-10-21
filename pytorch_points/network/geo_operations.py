@@ -84,7 +84,7 @@ def normalize_point_batch_to_sphere(pc: torch.Tensor, NCHW=True):
     return pc, centroid, furthest_distance
 
 
-def batch_normals(points, base=None, nn_size=20, NCHW=True):
+def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     """
     compute normals vectors for batched points [B, C, M]
     If base is given, compute the normals of points using the neighborhood in base

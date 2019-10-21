@@ -379,11 +379,15 @@ def save_ply_property(points, property, filename, property_max=None, property_mi
 
 def save_pts(filename, points, normals=None, labels=None):
     assert(points.ndim==2)
+    if points.shape[-1] == 2:
+        points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
     if normals is not None:
         points = np.concatenate([points, normals], axis=1)
     if labels is not None:
         points = np.concatenate([points, labels], axis=1)
-    np.savetxt(filename, points, fmt=["%.10e"]*points.shape[1]+["\"%i\""])
+        np.savetxt(filename, points, fmt=["%.10e"]*points.shape[1]+["\"%i\""])
+    else:
+        np.savetxt(filename, points, fmt=["%.10e"]*points.shape[1])
 
 """
 augmentation operations for a point cloud (TODO: extend to batches of point clouds)
