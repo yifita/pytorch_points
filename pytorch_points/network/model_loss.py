@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from .._ext import losses
-from .operations import faiss_knn
+from .operations import faiss_knn, group_knn
 from . import geo_operations as geo_op
 from matplotlib import cm
 
@@ -82,7 +82,7 @@ class PointLaplacianLoss(torch.nn.Module):
         self.nn_size = nn_size
         self.use_norm = use_norm
 
-    def forward(self, point1, point2):
+    def forward(self, point1, point2, *args, **kwargs):
         """
         point1: (B,N,D) ref points (where connectivity is computed)
         point2: (B,N,D) pred points, uses connectivity of point1
@@ -138,13 +138,13 @@ class PointStretchLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K), (B,N,K)
-        group_points_ref, knn_idx, _ = faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
+        group_points_ref, knn_idx, _ = group_knn(self.nn_size+1, points_ref, points_ref, NCHW=False, unique=True)
         knn_idx = knn_idx[:, :, 1:]
         group_points_ref = group_points_ref[:,:,1:,:]
         dist_ref = torch.norm(group_points_ref - points_ref.unsqueeze(2), dim=-1, p=2)
         group_points = torch.gather(points.unsqueeze(1).expand(-1, knn_idx.shape[1], -1, -1), 2, knn_idx.unsqueeze(-1).expand(-1, -1, -1, points.shape[-1]))
         dist = torch.norm(group_points - points.unsqueeze(2), dim=-1, p=2)
-        stretch = torch.max(dist/dist_ref-1, torch.zeros_like(dist))
+        stretch = torch.max(dist/(dist_ref+1e-10)-1, torch.zeros_like(dist))
         if self.reduction == "mean":
             return torch.mean(stretch)
         elif self.reduction == "sum":

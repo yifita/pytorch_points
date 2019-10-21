@@ -56,7 +56,7 @@ def normalize_to_box(input):
         minP = np.amin(input, axis=axis, keepdims=True)
         centroid = (maxP+minP)/2
         input = input - centroid
-        furthest_distance = np.amax(np.abs(input), axis=[axis, -1], keepdims=True)
+        furthest_distance = np.amax(np.abs(input), axis=(axis, -1), keepdims=True)
         input = input / furthest_distance
     elif isinstance(input, torch.Tensor):
         maxP = torch.max(input, dim=axis, keepdim=True)[0]
