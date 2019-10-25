@@ -247,6 +247,19 @@ def read_ply(file, count=None):
             points = downsample_points(points, count)
     return points
 
+def read_ply_with_face(file):
+    loaded = plyfile.PlyData.read(file)
+    points = np.vstack([loaded['vertex'].data['x'],
+                        loaded['vertex'].data['y'], loaded['vertex'].data['z']])
+    if 'nx' in loaded['vertex'].data.dtype.names:
+        normals = np.vstack([loaded['vertex'].data['nx'],
+                             loaded['vertex'].data['ny'], loaded['vertex'].data['nz']])
+        points = np.concatenate([points, normals], axis=0)
+
+    points = points.transpose(1, 0)
+    faces = np.vstack([loaded["face"].data[i][0] for i in range(loaded["face"].count)])
+    return points, faces
+
 
 def save_ply_with_face_property(points, faces, property, property_max, filename, cmap_name="Set1", binary=True):
     face_num = faces.shape[0]
@@ -280,6 +293,8 @@ def save_ply_with_face(points, faces, filename, colors=None, binary=True):
 
     ply = plyfile.PlyData([plyfile.PlyElement.describe(
         vertex, 'vertex'), plyfile.PlyElement.describe(faces_all, 'face')], text=(not binary))
+    if not os.path.exists(os.path.dirname(filename)):
+        os.makedirs(os.path.dirname(filename))
     ply.write(filename)
 
 

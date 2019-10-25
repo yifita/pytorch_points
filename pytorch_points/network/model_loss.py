@@ -333,8 +333,8 @@ class NormalLoss(torch.nn.Module):
         self.NCHW = NCHW
 
     def forward(self, pred, gt):
-        pred_normals = geo_op.batch_normals(pred, nn_size=10, NCHW=self.NCHW)
-        gt_normals = geo_op.batch_normals(gt, nn_size=10, NCHW=self.NCHW)
+        pred_normals, idx = geo_op.batch_normals(pred, nn_size=10, NCHW=self.NCHW)
+        gt_normals = geo_op.batch_normals(gt, nn_size=10, NCHW=self.NCHW, idx=idx)
         # compare the normal with the closest point
         return self.metric(pred_normals, gt_normals)
 

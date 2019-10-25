@@ -2,8 +2,9 @@ import torch
 from .._ext import sampling
 from .._ext import linalg
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
-from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D
+from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn
 import numpy as np
+from scipy import sparse
 
 PI = 3.1415927
 
@@ -93,6 +94,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     Args:
         points:  (B,C,M)
         base:    (B,C,N)
+        idx      (B,M,nn_size)
     Returns:
         normals: (B,C,M)
     """
@@ -106,7 +108,10 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     assert(nn_size < base.shape[1])
     batch_size, M, C = points.shape
     # B,M,k,C
-    grouped_points, group_idx, _ = group_knn(nn_size, points, base, unique=True, NCHW=False)
+    if idx is None:
+        grouped_points, group_idx, _ = group_knn(nn_size, points, base, unique=True, NCHW=False)
+    else:
+        grouped_points = torch.gather(base.unsqueeze(1).expand(-1,M,-1,-1), 2, idx.unsqueeze(-1).expand(-1,-1,-1,C))
     group_center = torch.mean(grouped_points, dim=2, keepdim=True)
     points = grouped_points - group_center
     allpoints = points.view(-1, nn_size, C).contiguous()
@@ -117,7 +122,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     normals = normals.view(batch_size, M, C)
     if NCHW:
         normals = normals.transpose(1, 2)
-    return normals
+    return normals, group_idx
 
 
 def pointUniformLaplacian(points, knn_idx=None, nn_size=3):
@@ -271,6 +276,7 @@ class _CotLaplacianBatchLx(torch.autograd.Function):
         ctx.L = L
         batchV = V.reshape(-1, 3).cpu().numpy()
         Lx = L.dot(batchV)
+        Lx = Lx.reshape(V.shape)
         return convert_as(torch.Tensor(Lx), V)
 
     @staticmethod

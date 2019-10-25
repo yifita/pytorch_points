@@ -70,15 +70,18 @@ def load_network(net, path):
         INT trained step
     """
     # warnings.DeprecationWarning("load_network is deprecated. Use module.load_state_dict(strict=False) instead.")
-    logger.info("loading network from {}".format(path))
-    if path[-3:] == "pth":
-        loaded_state = torch.load(path)
-        if "states" in loaded_state:
-            loaded_state = loaded_state["states"]
-    else:
-        loaded_state = np.load(path).item()
-        if "states" in loaded_state:
-            loaded_state = loaded_state["states"]
+    if isinstance(path, str):
+        logger.info("loading network from {}".format(path))
+        if path[-3:] == "pth":
+            loaded_state = torch.load(path)
+            if "states" in loaded_state:
+                loaded_state = loaded_state["states"]
+        else:
+            loaded_state = np.load(path).item()
+            if "states" in loaded_state:
+                loaded_state = loaded_state["states"]
+    elif isinstance(path, dict):
+        loaded_state = path
 
     network = net.module if isinstance(
         net, torch.nn.DataParallel) else net
