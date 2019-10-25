@@ -91,7 +91,7 @@ class PointLaplacianLoss(torch.nn.Module):
         B = point1.shape[0]
         lap1, knn_idx = geo_op.pointUniformLaplacian(point1, nn_size=self.nn_size)
         if idx12 is not None:
-            point2 = torch.gather(point2, 1, idx12)
+            point2 = torch.gather(point2, 1, idx12.unsqueeze(-1).expand(-1,-1,3))
             lap2, _ = geo_op.pointUniformLaplacian(point2, nn_size=self.nn_size)
         else:
             assert(point2.shape[1] == point1.shape[1])
@@ -521,8 +521,8 @@ class ChamferLoss(torch.nn.Module):
             assert(gt.shape[:2] == gt_mask.shape), "Mask and input must have the same shape"
 
         assert(pred.size(2) == gt.size(2)), "input and output must be (B,N,D) and (B,M,D)"
-        assert(pred.is_contiguous())
-        assert(gt.is_contiguous())
+        pred = pred.contiguous()
+        gt = gt.contiguous()
         B,N,_ = pred.shape
         B,M,_ = gt.shape
 
