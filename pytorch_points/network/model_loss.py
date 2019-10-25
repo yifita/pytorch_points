@@ -326,17 +326,17 @@ class NormalLoss(torch.nn.Module):
         pred: (B,3,N) if NCHW, (B,N,3) otherwise
         gt  : (B,3,N) if NCHW, (B,N,3) otherwise
     """
-    def __init__(self, metric, nn_size=10, NCHW=True):
+    def __init__(self, nn_size=10, NCHW=False):
         super().__init__()
         self.nn_size = nn_size
-        self.metric = metric
         self.NCHW = NCHW
+        self.cos = torch.nn.CosineSimilarity(dim=(-1 if not self.NCHW else 1), eps=1e-08)
 
     def forward(self, pred, gt):
         pred_normals, idx = geo_op.batch_normals(pred, nn_size=10, NCHW=self.NCHW)
-        gt_normals = geo_op.batch_normals(gt, nn_size=10, NCHW=self.NCHW, idx=idx)
+        gt_normals, _ = geo_op.batch_normals(gt, nn_size=10, NCHW=self.NCHW, idx=idx)
         # compare the normal with the closest point
-        return self.metric(pred_normals, gt_normals)
+        return torch.mean(1-self.cos(pred_normals, gt_normals))
 
 
 class SimplePointRepulsionLoss(torch.nn.Module):

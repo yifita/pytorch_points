@@ -109,7 +109,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     batch_size, M, C = points.shape
     # B,M,k,C
     if idx is None:
-        grouped_points, group_idx, _ = group_knn(nn_size, points, base, unique=True, NCHW=False)
+        grouped_points, idx, _ = group_knn(nn_size, points, base, unique=True, NCHW=False)
     else:
         grouped_points = torch.gather(base.unsqueeze(1).expand(-1,M,-1,-1), 2, idx.unsqueeze(-1).expand(-1,-1,-1,C))
     group_center = torch.mean(grouped_points, dim=2, keepdim=True)
@@ -122,7 +122,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     normals = normals.view(batch_size, M, C)
     if NCHW:
         normals = normals.transpose(1, 2)
-    return normals, group_idx
+    return normals, idx
 
 
 def pointUniformLaplacian(points, knn_idx=None, nn_size=3):
