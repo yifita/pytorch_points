@@ -106,7 +106,7 @@ __global__ void LabeledNmDistanceKernel(int b,int n,int c, const scalar_t * xyz,
 			__syncthreads();
 		}
 		// after processing all xyz2 and xyz1 for this batch
-		// go over result_i of xyz1, check if index = 0, change distance to 0
+		// go over result_i of xyz1, check if index < 0, change distance to 0
 		for (int j=threadIdx.x+blockIdx.y*blockDim.x;j<n;j+=blockDim.x*gridDim.y){
 			if (result_i[((i*n+j))] < 0)
 				result[(i*n+j)] = 0;

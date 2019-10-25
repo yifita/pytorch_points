@@ -73,7 +73,7 @@ class MeshLaplacianLoss(torch.nn.Module):
 
 class PointLaplacianLoss(torch.nn.Module):
     """
-    compare uniform laplacian of two point clouds assuming known correspondence
+    compare uniform laplacian of two point clouds assuming known or given correspondence
     metric: an instance of a module e.g. L1Loss
     """
     def __init__(self, nn_size, metric, use_norm=False):
@@ -82,13 +82,20 @@ class PointLaplacianLoss(torch.nn.Module):
         self.nn_size = nn_size
         self.use_norm = use_norm
 
-    def forward(self, point1, point2, *args, **kwargs):
+    def forward(self, point1, point2, idx12=None, *args, **kwargs):
         """
         point1: (B,N,D) ref points (where connectivity is computed)
-        point2: (B,N,D) pred points, uses connectivity of point1
+        point2: (B,M,D) pred points, uses connectivity of point1
+        idx12:  (B,N)   correspondence from 1 to 2
         """
+        B = point1.shape[0]
         lap1, knn_idx = geo_op.pointUniformLaplacian(point1, nn_size=self.nn_size)
-        lap2, _ = geo_op.pointUniformLaplacian(point2, knn_idx=knn_idx)
+        if idx12 is not None:
+            point2 = torch.gather(point2, 1, idx12)
+            lap2, _ = geo_op.pointUniformLaplacian(point2, nn_size=self.nn_size)
+        else:
+            assert(point2.shape[1] == point1.shape[1])
+            lap2, _ = geo_op.pointUniformLaplacian(point2, knn_idx=knn_idx)
         if self.use_norm:
             lap1 = torch.norm(lap1, dim=-1, p=2)
             lap2 = torch.norm(lap2, dim=-1, p=2)
@@ -319,24 +326,38 @@ class SmapeLoss(torch.nn.Module):
 
 class NormalLoss(torch.nn.Module):
     """
-    compare the PCA normals of two point clouds
+    compare the PCA normals of two point clouds assuming known or given correspondence
     ===
     params:
-        NCHW: order of dimensions, default True
-        pred: (B,3,N) if NCHW, (B,N,3) otherwise
-        gt  : (B,3,N) if NCHW, (B,N,3) otherwise
+        pred : (B,N,3)
+        gt   : (B,N,3)
+        idx12: (B,N)
     """
-    def __init__(self, nn_size=10, NCHW=False):
+    def __init__(self, nn_size=10, reduction="mean"):
         super().__init__()
         self.nn_size = nn_size
-        self.NCHW = NCHW
-        self.cos = torch.nn.CosineSimilarity(dim=(-1 if not self.NCHW else 1), eps=1e-08)
+        self.reduction = reduction
+        self.cos = torch.nn.CosineSimilarity(dim=-1, eps=1e-08)
 
-    def forward(self, pred, gt):
-        pred_normals, idx = geo_op.batch_normals(pred, nn_size=10, NCHW=self.NCHW)
-        gt_normals, _ = geo_op.batch_normals(gt, nn_size=10, NCHW=self.NCHW, idx=idx)
+    def forward(self, gt, pred, idx12=None):
+        gt_normals, idx = geo_op.batch_normals(gt, nn_size=self.nn_size, NCHW=False)
+        if idx12 is not None:
+            pred = torch.gather(pred, 1, idx12.unsqueeze(-1).expand(-1,-1,3))
+            pred_normals, _ = geo_op.batch_normals(pred, nn_size=self.nn_size, NCHW=False)
+        else:
+            pred_normals, _ = geo_op.batch_normals(pred, nn_size=self.nn_size, NCHW=False, idx=idx)
+
         # compare the normal with the closest point
-        return torch.mean(1-self.cos(pred_normals, gt_normals))
+        loss = 1-self.cos(pred_normals, gt_normals)
+        if self.reduction == "mean":
+            return loss.mean(loss)
+        elif self.reduction == "max":
+            return (torch.max(loss, dim=-1)[0]).mean()
+        elif self.reduction == "sum":
+            return torch.sum(loss, dim=-1).mean()
+        elif self.reduction == "none":
+            return loss
+
 
 
 class SimplePointRepulsionLoss(torch.nn.Module):
@@ -423,6 +444,7 @@ nndistance = NmDistanceFunction.apply  # type: ignore
 
 
 class LabeledNmdistanceFunction(torch.autograd.Function):
+    """ CD within the same category, ignore points that have no matching category """
     @staticmethod
     def forward(ctx, xyz1, xyz2, label1, label2):
         batchsize, n, _ = xyz1.size()
