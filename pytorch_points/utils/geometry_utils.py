@@ -12,6 +12,19 @@ from collections import abc
 from ..network.geo_operations import compute_face_normals_and_areas
 from ..misc import logger
 
+def normalize_to_same_area(v_ref: torch.Tensor, f_ref: torch.Tensor, v: torch.Tensor, f:torch.Tensor):
+    """
+    normalize mesh(v,f) to have the same surface area as mesh(v_ref, f_ref)
+    """
+    area_ref = compute_face_normals_and_areas(v_ref,f_ref)[1]
+    area = compute_face_normals_and_areas(v, f)[1]
+    area_ref = torch.sum(area_ref, dim=-1)
+    area = torch.sum(area, dim=-1)
+    ratio = torch.sqrt(area_ref/area).unsqueeze(-1).unsqueeze(-1)
+    v = v*ratio
+    return v
+
+
 def read_trimesh(filename, return_mesh=False, **kwargs):
     """
     load vertices and faces of a mesh file
@@ -213,7 +226,7 @@ class Mesh(abc.Mapping):
             logger.error("[{}] Must provide a mesh".format(__class__))
 
         # build_gemm(self, self.fs)
-        self.farea = compute_face_normals_and_areas(self.vs, self.fs)
+        self.farea = compute_face_normals_and_areas(self.vs, self.fs)[1]
         self.features = ['vs', 'fs', 'vn', 'fn', 'farea']
 
     def __getitem__(self, key):

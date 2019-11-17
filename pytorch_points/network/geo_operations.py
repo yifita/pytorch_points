@@ -2,7 +2,7 @@ import torch
 from .._ext import sampling
 from .._ext import linalg
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
-from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn
+from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn, gather_points
 import numpy as np
 from scipy import sparse
 
@@ -184,12 +184,13 @@ class UniformLaplacian(torch.nn.Module):
         self.L = L
         self.Lii = Lii
 
-    def forward(self, verts, faces):
+    def forward(self, verts, faces=None):
         batch, nv = verts.shape[:2]
         assert(verts.shape[0] == batch)
         assert(verts.shape[1] == nv)
 
         if self.L is None:
+            assert(faces is not None)
             self.computeLaplacian(verts, faces)
 
         if self.L.shape[0] != (verts.shape[0]*verts.shape[1]):
@@ -210,6 +211,8 @@ def convert_as(src, trg):
     src = src.type_as(trg)
     if src.is_cuda:
         src = src.cuda(device=trg.get_device())
+
+    src.requires_grad_(trg.requires_grad)
     return src
 
 class CotLaplacian(torch.nn.Module):
@@ -228,6 +231,7 @@ class CotLaplacian(torch.nn.Module):
         B,N,_ = V.shape
         # Compute cotangents
         C = cotangent(V, F)
+        assert(check_values(C))
         C_np = C.cpu().numpy()
         batchC = C_np.reshape(-1, 3)
         # Adjust face indices to stack:
@@ -264,8 +268,8 @@ class CotLaplacian(torch.nn.Module):
         if self.L is None:
             assert(F is not None)
             self.computeLaplacian(V, F)
-
         Lx = _cotLx(V, self.L)
+        Lx.requires_grad_(V.requires_grad)
         return Lx
 
 
@@ -277,7 +281,8 @@ class _CotLaplacianBatchLx(torch.autograd.Function):
         batchV = V.reshape(-1, 3).cpu().numpy()
         Lx = L.dot(batchV)
         Lx = Lx.reshape(V.shape)
-        return convert_as(torch.Tensor(Lx), V)
+        Lx = convert_as(torch.Tensor(Lx), V)
+        return Lx
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -308,7 +313,8 @@ def cotangent(V, F):
         angles for triangles, columns correspond to edges 23,31,12
     B x F x 3 x 3
     """
-    indices_repeat = torch.stack([F, F, F], dim=2).to(device=V.device)
+    B, N, _ = V.shape
+    indices_repeat = torch.stack([F, F, F], dim=2).to(device=V.device).expand(B, -1, -1, -1)
 
     #v1 is the list of first triangles B*F*3, v2 second and v3 third
     v1 = torch.gather(V, 1, indices_repeat[:, :, :, 0].long())
@@ -323,7 +329,11 @@ def cotangent(V, F):
     sp = (l1 + l2 + l3) * 0.5
 
     # Heron's formula for area #FIXME why the *2 ? Heron formula is without *2 It's the 0.5 than appears in the (0.5(cotalphaij + cotbetaij))
-    A = 2*torch.sqrt( sp * (sp-l1)*(sp-l2)*(sp-l3))
+    inside_sqrt = sp * (sp-l1)*(sp-l2)*(sp-l3)
+    inside_sqrt.masked_fill_(inside_sqrt<0, 0)
+    A = 2*torch.sqrt(inside_sqrt)
+    if not check_values(A):
+        import pdb; pdb.set_trace()
 
     # Theoreme d Al Kashi : c2 = a2 + b2 - 2ab cos(angle(ab))
     cot23 = (l2**2 + l3**2 - l1**2)
@@ -331,8 +341,8 @@ def cotangent(V, F):
     cot12 = (l1**2 + l2**2 - l3**2)
 
     # 2 in batch #proof page 98 http://www.cs.toronto.edu/~jacobson/images/alec-jacobson-thesis-2013-compressed.pdf
-    C = torch.stack([cot23, cot31, cot12], 2) / torch.unsqueeze(A, 2) / 4
-
+    C = torch.stack([cot23, cot31, cot12], 2) / (torch.unsqueeze(A, 2)+1e-10) / 4
+    C.masked_fill_(A.unsqueeze(2)==0, 0.0)
     return C
 
 
@@ -523,7 +533,7 @@ def compute_face_normals_and_areas(vertices: torch.Tensor, faces: torch.Tensor):
         faces      (B,F,3)
     :return
         face_normals         (B,F,3)
-        squared_face_areas   (B,F)
+        face_areas   (B,F)
     """
     ndim = vertices.ndimension()
     if vertices.ndimension() == 2 and faces.ndimension() == 2:

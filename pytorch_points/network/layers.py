@@ -35,6 +35,8 @@ class DenseEdgeConv(nn.Module):
             self.mlps.append(torch.nn.Conv2d(
                 in_channels, growth_rate, 1, bias=True))
 
+        self.out_channels = in_channels+growth_rate
+
     def get_local_graph(self, x, k, idx=None):
         """Construct edge feature [x, NN_i - x] for each point x
         :param

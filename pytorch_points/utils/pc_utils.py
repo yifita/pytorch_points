@@ -75,8 +75,8 @@ def center_bounding_box(points):
     # ouput : Numpy Tensor N_pts, D_dim
     # Center bounding box of first 3 dimensions
     if isinstance(points, torch.Tensor):
-        min_vals = torch.min(points, 0)[0]
-        max_vals = torch.max(points, 0)[0]
+        min_vals = torch.min(points, dim=0)[0]
+        max_vals = torch.max(points, dim=0)[0]
         points = points - (min_vals + max_vals) / 2
         return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
     elif isinstance(points, np.ndarray):
@@ -414,7 +414,7 @@ def get_3D_rot_matrix(axis, angle):
     if axis == 1:
         return np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [- np.sin(angle), 0, np.cos(angle)]])
     if axis == 2:
-        return np.array([[np.cos(theta), -np.sin(theta), 0], [np.sin(angle), np.cos(angle), 0], [1, 0, 0]])
+        return np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [1, 0, 0]])
 
 def uniform_rotation_axis_matrix(axis=0, range_rot=360):
     # input : Numpy Tensor N_pts, 3
