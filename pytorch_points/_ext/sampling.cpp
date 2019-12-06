@@ -21,9 +21,9 @@ void gather_points_grad_kernel_launcher_fast(int b, int c, int n, int npoints,
 
 int gather_points_wrapper_fast(int b, int c, int n, int npoints,
     at::Tensor& points_tensor, at::Tensor& idx_tensor, at::Tensor& out_tensor){
-    const float *points = points_tensor.data<float>();
-    const int *idx = idx_tensor.data<int>();
-    float *out = out_tensor.data<float>();
+    const float *points = points_tensor.data_ptr<float>();
+    const int *idx = idx_tensor.data_ptr<int>();
+    float *out = out_tensor.data_ptr<float>();
 
     cudaStream_t stream = THCState_getCurrentStream(state);
     gather_points_kernel_launcher_fast(b, c, n, npoints, points, idx, out, stream);
@@ -34,9 +34,9 @@ int gather_points_wrapper_fast(int b, int c, int n, int npoints,
 int gather_points_grad_wrapper_fast(int b, int c, int n, int npoints,
     at::Tensor& grad_out_tensor, at::Tensor& idx_tensor, at::Tensor& grad_points_tensor) {
 
-    const float *grad_out = grad_out_tensor.data<float>();
-    const int *idx = idx_tensor.data<int>();
-    float *grad_points = grad_points_tensor.data<float>();
+    const float *grad_out = grad_out_tensor.data_ptr<float>();
+    const int *idx = idx_tensor.data_ptr<int>();
+    float *grad_points = grad_points_tensor.data_ptr<float>();
 
     cudaStream_t stream = THCState_getCurrentStream(state);
     gather_points_grad_kernel_launcher_fast(b, c, n, npoints, grad_out, idx, grad_points, stream);
@@ -91,11 +91,11 @@ at::Tensor ball_query_wrapper_fast(at::Tensor& new_xyz_tensor, at::Tensor& xyz_t
     CHECK_INPUT(xyz_tensor);
     CHECK_CUDA(new_xyz_tensor);
     CHECK_CUDA(xyz_tensor);
-    const float *new_xyz = new_xyz_tensor.data<float>();
-    const float *xyz = xyz_tensor.data<float>();
+    const float *new_xyz = new_xyz_tensor.data_ptr<float>();
+    const float *xyz = xyz_tensor.data_ptr<float>();
     at::Tensor idx_tensor = torch::zeros({new_xyz_tensor.size(0), new_xyz_tensor.size(1), nsample},
                                   at::device(new_xyz_tensor.device()).dtype(at::ScalarType::Int));
-    int *idx = idx_tensor.data<int>();
+    int *idx = idx_tensor.data_ptr<int>();
 
     const int b = new_xyz_tensor.size(0);
     const int m = new_xyz_tensor.size(1);
@@ -150,10 +150,10 @@ at::Tensor group_points(at::Tensor points, at::Tensor idx) {
 
   if (points.type().is_cuda()) {
     group_points_kernel_wrapper(points.size(0), points.size(1), points.size(2),
-                                idx.size(1), idx.size(2), points.data<float>(),
-                                idx.data<int>(), output.data<float>());
+                                idx.size(1), idx.size(2), points.data_ptr<float>(),
+                                idx.data_ptr<int>(), output.data_ptr<float>());
   } else {
-    AT_CHECK(false, "CPU not supported");
+    TORCH_CHECK(false, "CPU not supported");
   }
 
   return output;
@@ -176,9 +176,9 @@ at::Tensor group_points_grad(at::Tensor grad_out, at::Tensor idx, const int n) {
   if (grad_out.type().is_cuda()) {
     group_points_grad_kernel_wrapper(
         grad_out.size(0), grad_out.size(1), n, idx.size(1), idx.size(2),
-        grad_out.data<float>(), idx.data<int>(), output.data<float>());
+        grad_out.data_ptr<float>(), idx.data_ptr<int>(), output.data_ptr<float>());
   } else {
-    AT_CHECK(false, "CPU not supported");
+    TORCH_CHECK(false, "CPU not supported");
   }
 
   return output;
@@ -186,10 +186,10 @@ at::Tensor group_points_grad(at::Tensor grad_out, at::Tensor idx, const int n) {
 
 void three_nn_wrapper_fast(int b, int n, int m, at::Tensor unknown_tensor,
     at::Tensor known_tensor, at::Tensor dist2_tensor, at::Tensor idx_tensor) {
-    const float *unknown = unknown_tensor.data<float>();
-    const float *known = known_tensor.data<float>();
-    float *dist2 = dist2_tensor.data<float>();
-    int *idx = idx_tensor.data<int>();
+    const float *unknown = unknown_tensor.data_ptr<float>();
+    const float *known = known_tensor.data_ptr<float>();
+    float *dist2 = dist2_tensor.data_ptr<float>();
+    int *idx = idx_tensor.data_ptr<int>();
 
     cudaStream_t stream = THCState_getCurrentStream(state);
     three_nn_kernel_launcher_fast(b, n, m, unknown, known, dist2, idx, stream);
@@ -202,10 +202,10 @@ void three_interpolate_wrapper_fast(int b, int c, int m, int n,
                          at::Tensor weight_tensor,
                          at::Tensor out_tensor) {
 
-    const float *points = points_tensor.data<float>();
-    const float *weight = weight_tensor.data<float>();
-    float *out = out_tensor.data<float>();
-    const int *idx = idx_tensor.data<int>();
+    const float *points = points_tensor.data_ptr<float>();
+    const float *weight = weight_tensor.data_ptr<float>();
+    float *out = out_tensor.data_ptr<float>();
+    const int *idx = idx_tensor.data_ptr<int>();
 
     cudaStream_t stream = THCState_getCurrentStream(state);
     three_interpolate_kernel_launcher_fast(b, c, m, n, points, idx, weight, out, stream);
@@ -217,10 +217,10 @@ void three_interpolate_grad_wrapper_fast(int b, int c, int n, int m,
                             at::Tensor weight_tensor,
                             at::Tensor grad_points_tensor) {
 
-    const float *grad_out = grad_out_tensor.data<float>();
-    const float *weight = weight_tensor.data<float>();
-    float *grad_points = grad_points_tensor.data<float>();
-    const int *idx = idx_tensor.data<int>();
+    const float *grad_out = grad_out_tensor.data_ptr<float>();
+    const float *weight = weight_tensor.data_ptr<float>();
+    float *grad_points = grad_points_tensor.data_ptr<float>();
+    const int *idx = idx_tensor.data_ptr<int>();
 
     cudaStream_t stream = THCState_getCurrentStream(state);
     three_interpolate_grad_kernel_launcher_fast(b, c, n, m, grad_out, idx, weight, grad_points, stream);
