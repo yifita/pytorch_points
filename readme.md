@@ -22,7 +22,7 @@ conda update -n base -c defaults conda
 # requirements
 conda config --add channels pytorch
 conda config --add channels conda-forge
-conda create --name pytorch-1.1.0 --file requirements.txt
+conda create --name pytorch- --file requirements.txt
 
 python setup.py install
 ```
