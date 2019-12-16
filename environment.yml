@@ -1,0 +1,19 @@
+name: pytorch-all
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.7.3
+  - cudatoolkit=10.0
+  - torchvision
+  - pytorch
+  - faiss-gpu
+  - matplotlib
+  - scipy
+  - openmesh-python
+  - joblib
+  - scikit-learn
+  - pandas
+prefix: /home/ywang/anaconda3/envs/pytorch-all
+
