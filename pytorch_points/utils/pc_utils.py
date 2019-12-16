@@ -1,28 +1,89 @@
-""" Utility functions for processing point clouds.
+"""
+Utility functions for processing point clouds.
 """
 import os
 import numpy as np
-
+import torch
 # Point cloud IO
 from matplotlib import cm
+import matplotlib.colors as mpc
 import plyfile
 
 
-def normalize_point_cloud(input):
+def normalize_to_sphere(input):
     """
-    input: pc [N, P, 3]
+    recenter point cloud to mean value and rescale to fit inside a unit ball
+    input: pc [N, P, dim] or [P, dim]
     output: pc, centroid, furthest_distance
     """
     if len(input.shape) == 2:
         axis = 0
     elif len(input.shape) == 3:
         axis = 1
-    centroid = np.mean(input, axis=axis, keepdims=True)
-    input = input - centroid
-    furthest_distance = np.amax(
-        np.sqrt(np.sum(input ** 2, axis=-1, keepdims=True)), axis=axis, keepdims=True)
-    input = input / furthest_distance
+    if isinstance(input, np.ndarray):
+        centroid = np.mean(input, axis=axis, keepdims=True)
+        input = input - centroid
+        furthest_distance = np.amax(
+            np.sqrt(np.sum(input ** 2, axis=-1, keepdims=True)), axis=axis, keepdims=True)
+        input = input / furthest_distance
+    elif isinstance(input, torch.Tensor):
+        centroid = torch.mean(input, dim=axis, keepdims=True)
+        input = input - centroid
+        furthest_distance = torch.max(
+            torch.sqrt(torch.sum(input ** 2, dim=-1, keepdims=True)), dim=axis, keepdims=True)[0]
+        input = input / furthest_distance
+
     return input, centroid, furthest_distance
+
+def normalize_to_box(input):
+    """
+    normalize point cloud to unit bounding box
+    center = (max - min)/2
+    scale = max(abs(x))
+    input: pc [N, P, dim] or [P, dim]
+    output: pc, centroid, furthest_distance
+    """
+    if len(input.shape) == 2:
+        axis = 0
+        P = input.shape[0]
+        D = input.shape[1]
+    elif len(input.shape) == 3:
+        axis = 1
+        P = input.shape[1]
+        D = input.shape[2]
+    if isinstance(input, np.ndarray):
+        maxP = np.amax(input, axis=axis, keepdims=True)
+        minP = np.amin(input, axis=axis, keepdims=True)
+        centroid = (maxP+minP)/2
+        input = input - centroid
+        furthest_distance = np.amax(np.abs(input), axis=(axis, -1), keepdims=True)
+        input = input / furthest_distance
+    elif isinstance(input, torch.Tensor):
+        maxP = torch.max(input, dim=axis, keepdim=True)[0]
+        minP = torch.min(input, dim=axis, keepdim=True)[0]
+        centroid = (maxP+minP)/2
+        input = input - centroid
+        in_shape = list(input.shape[:axis])+[P*D]
+        furthest_distance = torch.max(torch.abs(input).view(in_shape), dim=axis, keepdim=True)[0]
+        furthest_distance = furthest_distance.unsqueeze(-1)
+        input = input / furthest_distance
+
+    return input, centroid, furthest_distance
+
+def center_bounding_box(points):
+    # input : Numpy Tensor N_pts, D_dim
+    # ouput : Numpy Tensor N_pts, D_dim
+    # Center bounding box of first 3 dimensions
+    if isinstance(points, torch.Tensor):
+        min_vals = torch.min(points, dim=0)[0]
+        max_vals = torch.max(points, dim=0)[0]
+        points = points - (min_vals + max_vals) / 2
+        return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
+    elif isinstance(points, np.ndarray):
+        min_vals = np.min(points, 0)
+        max_vals = np.max(points, 0)
+        points = points - (min_vals + max_vals) / 2
+        return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
 
 
 def jitter_perturbation_point_cloud(batch_data, sigma=0.005, clip=0.02, is_2D=False):
@@ -80,7 +141,7 @@ def rotate_point_cloud_and_gt(batch_data, batch_gt=None):
 
 
 def random_scale_point_cloud_and_gt(batch_data, batch_gt=None, scale_low=0.5, scale_high=2):
-    """ Randomly scale the point cloud. Scale is per point cloud.
+    """ Randomly scale the point cloud. Scale is per point cloud, i.e. isotropic
         Input:
             BxNx3 array, original batch of point clouds
         Return:
@@ -98,14 +159,14 @@ def random_scale_point_cloud_and_gt(batch_data, batch_gt=None, scale_low=0.5, sc
 
 
 def downsample_points(pts, K):
-    # if num_pts > 8K use farthest sampling
+    # if num_pts > 2K use farthest sampling
     # else use random sampling
     if pts.shape[0] >= 2 * K:
         sampler = FarthestSampler()
         return sampler(pts, K)
     else:
         return pts[np.random.choice(pts.shape[0], K,
-                                    replace=(K < pts.shape[0])), :]
+                                    replace=False), :]
 
 
 class FarthestSampler:
@@ -186,21 +247,36 @@ def read_ply(file, count=None):
             points = downsample_points(points, count)
     return points
 
+def read_ply_with_face(file):
+    loaded = plyfile.PlyData.read(file)
+    points = np.vstack([loaded['vertex'].data['x'],
+                        loaded['vertex'].data['y'], loaded['vertex'].data['z']])
+    if 'nx' in loaded['vertex'].data.dtype.names:
+        normals = np.vstack([loaded['vertex'].data['nx'],
+                             loaded['vertex'].data['ny'], loaded['vertex'].data['nz']])
+        points = np.concatenate([points, normals], axis=0)
 
-def save_ply_with_face_property(points, faces, property, property_max, filename, cmap_name="Set1"):
+    points = points.transpose(1, 0)
+    faces = np.vstack([loaded["face"].data[i][0] for i in range(loaded["face"].count)])
+    return points, faces
+
+
+def save_ply_with_face_property(points, faces, property, property_max, filename, cmap_name="Set1", binary=True):
     face_num = faces.shape[0]
     colors = np.full(faces.shape, 0.5)
     cmap = cm.get_cmap(cmap_name)
     for point_idx in range(face_num):
         colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
-    save_ply_with_face(points, faces, filename, colors)
+    save_ply_with_face(points, faces, filename, colors, binary=True)
 
 
-def save_ply_with_face(points, faces, filename, colors=None):
+def save_ply_with_face(points, faces, filename, colors=None, binary=True):
+    if points.shape[-1] == 2:
+        points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
     vertex = np.array([tuple(p) for p in points], dtype=[
                       ('x', 'f4'), ('y', 'f4'), ('z', 'f4')])
     faces = np.array([(tuple(p),) for p in faces], dtype=[
-                     ('vertex_indices', 'i4', (3, ))])
+                     ('vertex_indices', 'i4', (len(faces[0]), ))])
     descr = faces.dtype.descr
     if colors is not None:
         assert len(colors) == len(faces)
@@ -216,7 +292,9 @@ def save_ply_with_face(points, faces, filename, colors=None):
             faces_all[prop] = face_colors[prop]
 
     ply = plyfile.PlyData([plyfile.PlyElement.describe(
-        vertex, 'vertex'), plyfile.PlyElement.describe(faces_all, 'face')], text=False)
+        vertex, 'vertex'), plyfile.PlyElement.describe(faces_all, 'face')], text=(not binary))
+    if not os.path.exists(os.path.dirname(filename)):
+        os.makedirs(os.path.dirname(filename))
     ply.write(filename)
 
 
@@ -241,13 +319,26 @@ def load(filename, count=None):
     return points
 
 
-def save_ply(points, filename, colors=None, normals=None):
+def save_ply(points, filename, colors=None, normals=None, binary=True):
+    """
+    save 3D/2D points to ply file
+    Args:
+        points (numpy array): (N,2or3)
+        colors (numpy uint8 array): (N, 3or4)
+    """
+    assert(points.ndim == 2)
+    if points.shape[-1] == 2:
+        points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
+
     vertex = np.core.records.fromarrays(points.transpose(
         1, 0), names='x, y, z', formats='f4, f4, f4')
     num_vertex = len(vertex)
     desc = vertex.dtype.descr
 
     if normals is not None:
+        assert(normals.ndim == 2)
+        if normals.shape[-1] == 2:
+            normals = np.concatenate([normals, np.zeros_like(normals)[:, :1]], axis=-1)
         vertex_normal = np.core.records.fromarrays(
             normals.transpose(1, 0), names='nx, ny, nz', formats='f4, f4, f4')
         assert len(vertex_normal) == num_vertex
@@ -279,18 +370,136 @@ def save_ply(points, filename, colors=None, normals=None):
             vertex_all[prop] = vertex_color[prop]
 
     ply = plyfile.PlyData(
-        [plyfile.PlyElement.describe(vertex_all, 'vertex')], text=False)
+        [plyfile.PlyElement.describe(vertex_all, 'vertex')], text=(not binary))
     if not os.path.exists(os.path.dirname(filename)):
         os.makedirs(os.path.dirname(filename))
     ply.write(filename)
 
 
-def save_ply_property(points, property, filename, property_max=None, normals=None, cmap_name='Set1'):
+def save_ply_property(points, property, filename, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
     point_num = points.shape[0]
     colors = np.full([point_num, 3], 0.5)
     cmap = cm.get_cmap(cmap_name)
     if property_max is None:
         property_max = np.amax(property, axis=0)
-    for point_idx in range(point_num):
-        colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
-    save_ply(points, filename, colors, normals)
+    if property_min is None:
+        property_min = np.amin(property, axis=0)
+    p_range = property_max-property_min
+    if property_max == property_min:
+        property_max = property_min+1
+    normalizer = mpc.Normalize(vmin=property_min, vmax=property_max)
+    p = normalizer(property)
+    colors = cmap(p)[:,:3]
+    save_ply(points, filename, colors, normals, binary)
+
+def save_pts(filename, points, normals=None, labels=None):
+    assert(points.ndim==2)
+    if points.shape[-1] == 2:
+        points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
+    if normals is not None:
+        points = np.concatenate([points, normals], axis=1)
+    if labels is not None:
+        points = np.concatenate([points, labels], axis=1)
+        np.savetxt(filename, points, fmt=["%.10e"]*points.shape[1]+["\"%i\""])
+    else:
+        np.savetxt(filename, points, fmt=["%.10e"]*points.shape[1])
+
+"""
+augmentation operations for a point cloud (TODO: extend to batches of point clouds)
+https://github.com/ThibaultGROUEIX/CycleConsistentDeformation/blob/master/auxiliary/normalize_points.py
+"""
+def get_3D_rot_matrix(axis, angle):
+    if axis == 0:
+        return np.array([[1, 0, 0], [0, np.cos(angle), -np.sin(angle)], [0, np.sin(angle), np.cos(angle)]])
+    if axis == 1:
+        return np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [- np.sin(angle), 0, np.cos(angle)]])
+    if axis == 2:
+        return np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [1, 0, 0]])
+
+def uniform_rotation_axis_matrix(axis=0, range_rot=360):
+    # input : Numpy Tensor N_pts, 3
+    # ouput : Numpy Tensor N_pts, 3
+    # ouput : rot matrix Numpy Tensor 3, 3
+    # Uniform random rotation around axis
+    scale_factor = 360.0 / range_rot
+    theta = np.random.uniform(- np.pi / scale_factor, np.pi / scale_factor)
+    rot_matrix = get_3D_rot_matrix(axis, theta)
+    return torch.from_numpy(np.transpose(rot_matrix)).float()
+
+
+def uniform_rotation_axis(points, axis=0, normals=False, range_rot=360):
+    # input : Numpy Tensor N_pts, 3
+    # ouput : Numpy Tensor N_pts, 3
+    # ouput : rot matrix Numpy Tensor 3, 3
+    # Uniform random rotation around axis
+    rot_matrix = uniform_rotation_axis_matrix(axis, range_rot)
+
+    if isinstance(points, torch.Tensor):
+        points[:, :3] = torch.mm(points[:, :3], rot_matrix)
+        if normals:
+            points[:, 3:6] = torch.mm(points[:, 3:6], rot_matrix)
+        return points, rot_matrix
+    elif isinstance(points, np.ndarray):
+        points = points.copy()
+        points[:, :3] = points[:, :3].dot(rot_matrix.numpy())
+        if normals:
+            points[:, 3:6] = points[:, 3:6].dot(rot_matrix.numpy())
+        return points, rot_matrix
+    else:
+        print("Pierre-Alain was right.")
+
+def anisotropic_scaling(points):
+    # input : points : N_point, 3
+    scale = torch.rand(1, 3) / 2.0 + 0.75  # uniform sampling 0.75, 1.25
+    return scale * points  # Element_wize multiplication with broadcasting
+
+def uniform_rotation_sphere(points, normals=False):
+    # input : Tensor N_pts, 3
+    # ouput : Tensor N_pts, 3
+    # ouput : rot matrix Numpy Tensor 3, 3
+    # Uniform random rotation on the sphere
+    x = torch.Tensor(2)
+    x.uniform_()
+    p = torch.Tensor([[np.cos(np.pi * 2 * x[0]) * np.sqrt(x[1]),
+                       (np.random.binomial(1, 0.5, 1)[0] * 2 - 1) * np.sqrt(1 - x[1]),
+                       np.sin(np.pi * 2 * x[0]) * np.sqrt(x[1])]])
+    z = torch.Tensor([[0, 1, 0]])
+    v = (p - z) / (p - z).norm()
+    H = torch.eye(3) - 2 * torch.matmul(v.transpose(1, 0), v)
+    rot_matrix = - H
+
+    if isinstance(points, torch.Tensor):
+        points[:, :3] = torch.mm(points[:, :3], rot_matrix)
+        if normals:
+            points[:, 3:6] = torch.mm(points[:, 3:6], rot_matrix)
+        return points, rot_matrix
+
+    elif isinstance(points, np.ndarray):
+        points[:, :3] = points[:, :3].dot(rot_matrix.numpy())
+        if normals:
+            points[:, 3:6] = points[:, 3:6].dot(rot_matrix.numpy())
+        return points, rot_matrix
+    else:
+        print("Pierre-Alain was right.")
+
+def add_random_translation(points, scale=0.03):
+    # input : Numpy Tensor N_pts, D_dim
+    # ouput : Numpy Tensor N_pts, D_dim
+    # Uniform random translation on first 3 dimensions
+    a = torch.FloatTensor(3)
+    points[:, 0:3] = points[:, 0:3] + (a.uniform_(-1, 1) * scale).unsqueeze(0).expand(-1, 3)
+    return points
+
+def random_sphere(batch, num_points):
+    """generate random samples on a uni-sphere (B,N,3)"""
+    # double theta = 2 * M_PI * uniform01(generator);
+    # double phi = M_PI * uniform01(generator);
+    # double x = sin(phi) * cos(theta);
+    # double y = sin(phi) * sin(theta);
+    # double z = cos(phi);
+    theta = np.random.rand(batch, num_points)*2*np.pi
+    phi = np.random.rand(batch, num_points)*np.pi
+    x = np.sin(phi)*np.cos(theta)
+    y = np.sin(phi)*np.sin(theta)
+    z = np.cos(phi)
+    return np.stack([x,y,z], axis=-1)

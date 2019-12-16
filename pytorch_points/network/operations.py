@@ -1,39 +1,19 @@
-""" 
-code courtesy of 
+"""
+code courtesy of
 https://github.com/erikwijmans/Pointnet2_PyTorch
 """
 
 import torch
 import faiss
 import numpy as np
-from threading import Thread
+from scipy import sparse
 
 from .._ext import sampling
 from .._ext import linalg
+from ..utils.pytorch_utils import check_values, save_grad, saved_variables
 
 if torch.cuda.is_available():
     from .faiss_setup import GPU_RES
-
-
-def normalize_point_batch(pc, NCHW=True):
-    """
-    normalize a batch of point clouds
-    :param
-        pc      [B, N, 3] or [B, 3, N]
-        NCHW    if True, treat the second dimension as channel dimension
-    :return
-        pc      normalized point clouds, same shape as input
-        centroid [B, 1, 3] or [B, 3, 1] center of point clouds
-        furthest_distance [B, 1, 1] scale of point clouds
-    """
-    point_axis = 2 if NCHW else 1
-    dim_axis = 1 if NCHW else 2
-    centroid = torch.mean(pc, dim=point_axis, keepdim=True)
-    pc = pc - centroid
-    furthest_distance, _ = torch.max(
-        torch.sqrt(torch.sum(pc ** 2, dim=dim_axis, keepdim=True)), dim=point_axis, keepdim=True)
-    pc = pc / furthest_distance
-    return pc, centroid, furthest_distance
 
 
 def channel_shuffle(x, groups=2):
@@ -62,13 +42,15 @@ def jitter_perturbation_point_cloud(batch_data, sigma=0.005, clip=0.02, is_2D=Fa
 def __swig_ptr_from_FloatTensor(x):
     assert x.is_contiguous()
     assert x.dtype == torch.float32
-    return faiss.cast_integer_to_float_ptr(x.storage().data_ptr())
+    return faiss.cast_integer_to_float_ptr(
+        x.storage().data_ptr() + x.storage_offset() * 4)
 
 
 def __swig_ptr_from_LongTensor(x):
     assert x.is_contiguous()
     assert x.dtype == torch.int64, 'dtype=%s' % x.dtype
-    return faiss.cast_integer_to_long_ptr(x.storage().data_ptr())
+    return faiss.cast_integer_to_long_ptr(
+        x.storage().data_ptr() + x.storage_offset() * 8)
 
 
 def search_index_pytorch(database, x, k):
@@ -81,12 +63,13 @@ def search_index_pytorch(database, x, k):
         D BxMxK
         I BxMxK
     """
-    Dptr = database.storage().data_ptr()
+    Dptr = database.data_ptr()
+    is_cuda = False
     if not (x.is_cuda or database.is_cuda):
         index = faiss.IndexFlatL2(database.size(-1))
     else:
-        index = faiss.GpuIndexFlatL2(
-            GPU_RES, database.size(-1))  # dimension is 3
+        is_cuda = True
+        index = faiss.GpuIndexFlatL2(GPU_RES, database.size(-1))  # dimension is 3
     index.add_c(database.size(0), faiss.cast_integer_to_float_ptr(Dptr))
 
     assert x.is_contiguous()
@@ -96,16 +79,17 @@ def search_index_pytorch(database, x, k):
     D = torch.empty((n, k), dtype=torch.float32, device=x.device)
     I = torch.empty((n, k), dtype=torch.int64, device=x.device)
 
-    torch.cuda.synchronize()
+    if is_cuda:
+        torch.cuda.synchronize()
     xptr = __swig_ptr_from_FloatTensor(x)
     Iptr = __swig_ptr_from_LongTensor(I)
     Dptr = __swig_ptr_from_FloatTensor(D)
     index.search_c(n, xptr,
                    k, Dptr, Iptr)
-    torch.cuda.synchronize()
+    if is_cuda:
+        torch.cuda.synchronize()
     index.reset()
     return D, I
-
 
 class KNN(torch.autograd.Function):
     @staticmethod
@@ -161,7 +145,7 @@ def faiss_knn(k, query, points, NCHW=True):
     index_batch, distance_batch = KNN.apply(k, query_trans, points_trans)
     # BxNxC -> BxMxNxC
     points_expanded = points_trans.unsqueeze(dim=1).expand(
-        (-1, query.size(1), -1, -1))
+        (-1, query_trans.size(1), -1, -1))
     # BxMxk -> BxMxkxC
     index_batch_expanded = index_batch.unsqueeze(dim=-1).expand(
         (-1, -1, -1, points_trans.size(-1)))
@@ -266,7 +250,7 @@ class GatherFunction(torch.autograd.Function):
 
         output = torch.empty(
             B, C, npoint, dtype=features.dtype, device=features.device)
-        output = sampling.gather_forward(
+        sampling.gather_forward(
             B, C, N, npoint, features, idx, output
         )
 
@@ -282,14 +266,14 @@ class GatherFunction(torch.autograd.Function):
 
         grad_features = torch.zeros(
             B, ctx.C, ctx.N, dtype=grad_out.dtype, device=grad_out.device)
-        grad_features = sampling.gather_backward(
+        sampling.gather_backward(
             B, ctx.C, ctx.N, npoint, grad_out.contiguous(), idx, grad_features
         )
 
         return grad_features, None
 
 
-gather_points = GatherFunction.apply
+gather_points = GatherFunction.apply  # type: ignore
 
 
 class BallQuery(torch.autograd.Function):
@@ -318,7 +302,7 @@ class BallQuery(torch.autograd.Function):
         return None, None, None, None
 
 
-ball_query = BallQuery.apply
+ball_query = BallQuery.apply  # type: ignore
 
 
 class GroupingOperation(torch.autograd.Function):
@@ -363,7 +347,7 @@ class GroupingOperation(torch.autograd.Function):
         return grad_features, None
 
 
-grouping_operation = GroupingOperation.apply
+grouping_operation = GroupingOperation.apply  # type: ignore
 
 
 class QueryAndGroup(torch.nn.Module):
@@ -420,63 +404,6 @@ class QueryAndGroup(torch.nn.Module):
         return new_features
 
 
-class FurthestPointSampling(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, xyz, npoint, seedIdx):
-        r"""
-        Uses iterative furthest point sampling to select a set of npoint features that have the largest
-        minimum distance
-        Parameters
-        ----------
-        xyz : torch.Tensor
-            (B, N, 3) tensor where N > npoint
-        npoint : int32
-            number of features in the sampled set
-        Returns
-        -------
-        torch.LongTensor
-            (B, npoint) tensor containing the indices
-
-        """
-        B, N, _ = xyz.size()
-
-        idx = torch.empty([B, npoint], dtype=torch.int32, device=xyz.device)
-        temp = torch.full([B, N], 1e10, dtype=torch.float32, device=xyz.device)
-
-        sampling.furthest_sampling(
-            npoint, seedIdx, xyz, temp, idx
-        )
-        ctx.mark_non_differentiable(idx)
-        return idx
-
-
-__furthest_point_sample = FurthestPointSampling.apply
-
-
-def furthest_point_sample(xyz, npoint, NCHW=True, seedIdx=0):
-    """
-    :param
-        xyz (B, 3, N) or (B, N, 3)
-        npoint a constant
-    :return
-        torch.LongTensor
-            (B, npoint) tensor containing the indices
-        torch.FloatTensor
-            (B, npoint, 3) or (B, 3, npoint) point sets"""
-    assert(xyz.dim() == 3), "input for furthest sampling must be a 3D-tensor, but xyz.size() is {}".format(xyz.size())
-    # need transpose
-    if NCHW:
-        xyz = xyz.transpose(2, 1).contiguous()
-
-    assert(xyz.size(2) == 3), "furthest sampling is implemented for 3D points"
-    idx = __furthest_point_sample(xyz, npoint, seedIdx)
-    sampled_pc = gather_points(xyz.transpose(2, 1).contiguous(), idx)
-    if not NCHW:
-        sampled_pc = sampled_pc.transpose(2, 1).contiguous()
-    return idx, sampled_pc
-
-
 class BatchSVDFunction(torch.autograd.Function):
     """
     batched svd implemented by https://github.com/KinglittleQ/torch-batch-svd
@@ -523,72 +450,82 @@ def batch_svd(x):
     return BatchSVDFunction.apply(x)
 
 
-def batch_normals(points, base=None, nn_size=20, NCHW=True):
-    """
-    compute normals vectors for batched points [B, C, M]
-    If base is given, compute the normals of points using the neighborhood in base
-    The direction of normal could flip.
-    inputs:
-        points: (B,C,M)
-        base:   (B,C,N)
-    return:
-        normals: (B,C,M)
-    """
-    if base is None:
-        base = points
+def normalize(tensor, dim=-1):
+    """normalize tensor in specified dimension"""
+    return torch.nn.functional.normalize(tensor, p=2, dim=dim, eps=1e-12, out=None)
 
-    if NCHW:
-        points = points.transpose(2, 1).contiguous()
-        base = base.transpose(2, 1).contiguous()
+def sqrNorm(tensor, dim=-1, keepdim=False):
+    """squared L2 norm"""
+    return torch.sum(tensor*tensor, dim=dim, keepdim=keepdim)
 
-    assert(nn_size < base.shape[1])
-    batch_size, M, C = points.shape
-    # B,M,k,C
-    grouped_points, group_idx, _ = group_knn(nn_size, points, base, unique=True, NCHW=False)
-    group_center = torch.mean(grouped_points, dim=2, keepdim=True)
-    points = grouped_points - group_center
-    allpoints = points.view(-1, nn_size, C).contiguous()
-    # MB,C,k
-    U, S, V = batch_svd(allpoints)
-    # V is MBxCxC, last_u MBxC
-    normals = V[:, :, -1]
-    normals = normals.view(batch_size, M, C)
-    if NCHW:
-        normals = normals.transpose(1, 2)
-    return normals
+
+def dot_product(tensor1, tensor2, dim=-1, keepdim=False):
+    return torch.sum(tensor1*tensor2, dim=dim, keepdim=keepdim)
+
+def cross_product_2D(tensor1, tensor2, dim=1):
+    assert(tensor1.shape[dim] == tensor2.shape[dim] and tensor1.shape[dim] == 2)
+    output = torch.narrow(tensor1, dim, 0, 1) * torch.narrow(tensor2, dim, 1, 1) - torch.narrow(tensor1, dim, 1, 1) * torch.narrow(tensor2, dim, 0, 1)
+    return output.squeeze(dim)
+
+class ScatterAdd(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, src, idx, dim, out_size, fill=0.0):
+        out = torch.full(out_size, fill, device=src.device, dtype=src.dtype)
+        ctx.save_for_backward(idx)
+        out.scatter_add_(dim, idx, src)
+        ctx.mark_non_differentiable(idx)
+        ctx.dim = dim
+        return out
+
+    @staticmethod
+    def backward(ctx, ograd):
+        idx, = ctx.saved_tensors
+        grad = torch.gather(ograd, ctx.dim, idx)
+        return grad, None, None, None, None
+
+_scatter_add = ScatterAdd.apply
+
+def scatter_add(src, idx, dim, out_size=None, fill=0.0):
+    if out_size is None:
+        out_size = list(src.size())
+        dim_size = idx.max().item()+1
+        out_size[dim] = dim_size
+    return _scatter_add(src, idx, dim, out_size, fill)
+
 
 
 if __name__ == '__main__':
-    from ..utils import pc_utils
-    cuda0 = torch.device('cuda:0')
-    pc = pc_utils.read_ply("/home/ywang/Documents/points/point-upsampling/3PU/prepare_data/polygonmesh_base/build/data_PPU_output/training/112/angel4_aligned_2.ply")
-    pc = pc[:, :3]
-    print("{} input points".format(pc.shape[0]))
-    pc_utils.save_ply(pc, "./input.ply", colors=None, normals=None)
-    pc = torch.from_numpy(pc).requires_grad_().to(cuda0).unsqueeze(0)
-    pc = pc.transpose(2, 1)
+    # from ..utils import pc_utils
+    # cuda0 = torch.device('cuda:0')
+    # pc = pc_utils.read_ply("/home/ywang/Documents/points/point-upsampling/3PU/prepare_data/polygonmesh_base/build/data_PPU_output/training/112/angel4_aligned_2.ply")
+    # pc = pc[:, :3]
+    # print("{} input points".format(pc.shape[0]))
+    # pc_utils.save_ply(pc, "./input.ply", colors=None, normals=None)
+    # pc = torch.from_numpy(pc).requires_grad_().to(cuda0).unsqueeze(0)
+    # pc = pc.transpose(2, 1)
 
-    # test furthest point
-    idx, sampled_pc = furthest_point_sample(pc, 1250)
-    output = sampled_pc.transpose(2, 1).cpu().squeeze()
-    pc_utils.save_ply(output.detach(), "./output.ply", colors=None, normals=None)
+    # # test furthest point
+    # idx, sampled_pc = furthest_point_sample(pc, 1250)
+    # output = sampled_pc.transpose(2, 1).cpu().squeeze()
+    # pc_utils.save_ply(output.detach(), "./output.ply", colors=None, normals=None)
 
-    # test KNN
-    knn_points, _, _ = group_knn(10, sampled_pc, pc, NCHW=True)  # B, C, M, K
-    labels = torch.arange(0, knn_points.size(2)).unsqueeze_(
-        0).unsqueeze_(0).unsqueeze_(-1)  # 1, 1, M, 1
-    labels = labels.expand(knn_points.size(0), -1, -1,
-                           knn_points.size(3))  # B, 1, M, K
-    # B, C, P
-    labels = torch.cat(torch.unbind(labels, dim=-1), dim=-1).squeeze().detach().cpu().numpy()
-    knn_points = torch.cat(torch.unbind(knn_points, dim=-1),
-                           dim=-1).transpose(2, 1).squeeze(0).detach().cpu().numpy()
-    pc_utils.save_ply_property(knn_points, labels, "./knn_output.ply", cmap_name='jet')
+    # # test KNN
+    # knn_points, _, _ = group_knn(10, sampled_pc, pc, NCHW=True)  # B, C, M, K
+    # labels = torch.arange(0, knn_points.size(2)).unsqueeze_(
+    #     0).unsqueeze_(0).unsqueeze_(-1)  # 1, 1, M, 1
+    # labels = labels.expand(knn_points.size(0), -1, -1,
+    #                        knn_points.size(3))  # B, 1, M, K
+    # # B, C, P
+    # labels = torch.cat(torch.unbind(labels, dim=-1), dim=-1).squeeze().detach().cpu().numpy()
+    # knn_points = torch.cat(torch.unbind(knn_points, dim=-1),
+    #                        dim=-1).transpose(2, 1).squeeze(0).detach().cpu().numpy()
+    # pc_utils.save_ply_property(knn_points, labels, "./knn_output.ply", cmap_name='jet')
 
-    from torch.autograd import gradcheck
-    # test = gradcheck(furthest_point_sample, [pc, 1250], eps=1e-6, atol=1e-4)
+    # from torch.autograd import gradcheck
+    # # test = gradcheck(furthest_point_sample, [pc, 1250], eps=1e-6, atol=1e-4)
+    # # print(test)
+    # test = gradcheck(gather_points, [pc.to(  # type: ignore
+    #     dtype=torch.float64), idx], eps=1e-6, atol=1e-4)
+
     # print(test)
-    test = gradcheck(gather_points, [pc.to(
-        dtype=torch.float64), idx], eps=1e-6, atol=1e-4)
-
-    print(test)
+    pass

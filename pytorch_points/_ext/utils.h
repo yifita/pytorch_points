@@ -9,12 +9,12 @@
   CHECK_CONTIGUOUS(x)
 #define CHECK_IS_INT(x)                              \
   do {                                               \
-    AT_CHECK(x.scalar_type() == at::ScalarType::Int, \
+    TORCH_CHECK(x.scalar_type() == at::ScalarType::Int, \
              #x " must be an int tensor");           \
   } while (0)
 
 #define CHECK_IS_FLOAT(x)                              \
   do {                                                 \
-    AT_CHECK(x.scalar_type() == at::ScalarType::Float, \
+    TORCH_CHECK(x.scalar_type() == at::ScalarType::Float, \
              #x " must be a float tensor");            \
   } while (0)
