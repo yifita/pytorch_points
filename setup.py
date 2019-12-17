@@ -3,13 +3,14 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtensio
 
 print(find_packages())
 
-INSTALL_REQUIREMENTS = ['numpy', 'torch', 'plyfile', 'matplotlib']
+INSTALL_REQUIREMENTS = ['numpy', 'torch', 'plyfile', 'matplotlib', 'openmesh']
 setup(
     name='pytorch_points',
     description="pytorch extension for point cloud processing",
     author='Yifan Wang',
     author_email="yifan.wang@inf.ethz.ch",
-    version='0.9',
+    version='0.91',
+    url="https://github.com/yifita/pytorch_points",
     install_requires=INSTALL_REQUIREMENTS,
     packages=find_packages("."),
     ext_package="pytorch_points._ext",
