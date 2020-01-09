@@ -92,7 +92,7 @@ def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name=
     if isinstance(F, torch.Tensor):
         F = F.detach().cpu().numpy()
 
-    mesh = om.TriMesh()
+    mesh = om.TriMesh(points=V, face_vertex_indices=F)
     if v_colors is not None:
         if isinstance(v_colors, torch.Tensor):
             v_colors = v_colors.detach().cpu().numpy()
@@ -103,7 +103,12 @@ def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name=
             minV, maxV = v_colors.min(), v_colors.max()
             v_colors = (v_colors-minV)/maxV
             v_colors = [cmap(color) for color in v_colors]
+        else:
+            assert(v_colors.shape[1]==3 or v_colors.shape[1]==4)
+            if v_colors.shape[1] == 3:
+                mesh.vertex_colors()[:,-1]=1
         mesh.request_vertex_colors()
+        mesh.vertex_colors()[:] = v_colors
 
     if f_colors is not None:
         assert(f_colors.shape[0]==F.shape[0])
@@ -113,18 +118,12 @@ def array_to_mesh(V, F, v_colors=None, f_colors=None, v_normals=True, cmap_name=
             minV, maxV = f_colors.min(), f_colors.max()
             f_colors = (f_colors-minV)/maxV
             f_colors = [cmap(color) for color in f_colors]
+        else:
+            assert(f_colors.shape[1]==3 or f_colors.shape[1]==4)
+            if f_colors.shape[1] == 3:
+                mesh.face_colors()[:,-1]=1
         mesh.request_face_colors()
-
-    for v in range(V.shape[0]):
-        vh = mesh.add_vertex(V[v])
-        if mesh.has_vertex_colors() and v_colors is not None:
-            mesh.set_color(vh, v_colors[v])
-
-    for f in range(F.shape[0]):
-        vh_list = [mesh.vertex_handle(vIdx) for vIdx in F[f]]
-        fh0 = mesh.add_face(vh_list)
-        if mesh.has_face_colors() and f_colors is not None:
-            mesh.set_color(vh, f_colors[v])
+        mesh.face_colors()[:] = f_colors
 
     mesh.request_face_normals()
     if v_normals:
