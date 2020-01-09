@@ -82,11 +82,11 @@ def center_bounding_box(points):
     """
     is_torch = isinstance(points, torch.Tensor)
     if is_torch:
-        points = points.cpu().numpy()
         device = points.device
+        points = points.cpu().numpy()
 
-    min_vals = np.min(points, -2)
-    max_vals = np.max(points, -2)
+    min_vals = np.min(points, -2, keepdims=True)
+    max_vals = np.max(points, -2, keepdims=True)
     centroid = (min_vals + max_vals) / 2
     points = points - centroid
     bbox = (max_vals - min_vals)/2
