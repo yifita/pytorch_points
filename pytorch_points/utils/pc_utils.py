@@ -330,7 +330,7 @@ def load(filename, count=None):
     return points
 
 
-def save_ply(points, filename, colors=None, normals=None, binary=True):
+def save_ply(filename, points, colors=None, normals=None, binary=True):
     """
     save 3D/2D points to ply file
     Args:
@@ -387,7 +387,7 @@ def save_ply(points, filename, colors=None, normals=None, binary=True):
     ply.write(filename)
 
 
-def save_ply_property(points, property, filename, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
+def save_ply_property( filename, points, property, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
     point_num = points.shape[0]
     colors = np.full([point_num, 3], 0.5)
     cmap = cm.get_cmap(cmap_name)
@@ -401,7 +401,7 @@ def save_ply_property(points, property, filename, property_max=None, property_mi
     normalizer = mpc.Normalize(vmin=property_min, vmax=property_max)
     p = normalizer(property)
     colors = cmap(p)[:,:3]
-    save_ply(points, filename, colors, normals, binary)
+    save_ply(filename, points, colors, normals, binary)
 
 def save_pts(filename, points, normals=None, labels=None):
     assert(points.ndim==2)
