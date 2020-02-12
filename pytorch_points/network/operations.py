@@ -9,7 +9,6 @@ import numpy as np
 from scipy import sparse
 
 from .._ext import sampling
-from .._ext import linalg
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
 
 if torch.cuda.is_available():

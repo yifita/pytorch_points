@@ -1,8 +1,7 @@
 import torch
 from .._ext import sampling
-from .._ext import linalg
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
-from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn, gather_points
+from .operations import normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn, gather_points
 import numpy as np
 from scipy import sparse
 
