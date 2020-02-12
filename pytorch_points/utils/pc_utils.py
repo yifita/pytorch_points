@@ -71,19 +71,30 @@ def normalize_to_box(input):
     return input, centroid, furthest_distance
 
 def center_bounding_box(points):
-    # input : Numpy Tensor N_pts, D_dim
-    # ouput : Numpy Tensor N_pts, D_dim
-    # Center bounding box of first 3 dimensions
-    if isinstance(points, torch.Tensor):
-        min_vals = torch.min(points, dim=0)[0]
-        max_vals = torch.max(points, dim=0)[0]
-        points = points - (min_vals + max_vals) / 2
-        return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
-    elif isinstance(points, np.ndarray):
-        min_vals = np.min(points, 0)
-        max_vals = np.max(points, 0)
-        points = points - (min_vals + max_vals) / 2
-        return points, (min_vals + max_vals) / 2, (max_vals - min_vals)/2
+    """
+    centers the shapes
+    Args:
+        points: (*,N,D) D-dimensional points
+    Outputs:
+        points: centerred points
+        centroid: (*,D)
+        bbox:     (*,D)
+    """
+    is_torch = isinstance(points, torch.Tensor)
+    if is_torch:
+        device = points.device
+        points = points.cpu().numpy()
+
+    min_vals = np.min(points, -2, keepdims=True)
+    max_vals = np.max(points, -2, keepdims=True)
+    centroid = (min_vals + max_vals) / 2
+    points = points - centroid
+    bbox = (max_vals - min_vals)/2
+    if is_torch:
+        points = torch.from_numpy(points).to(device=device)
+        centroid = torch.from_numpy(centroid).to(device=device)
+        bbox = torch.from_numpy(bbox).to(device=device)
+    return points, centroid, bbox
 
 
 def jitter_perturbation_point_cloud(batch_data, sigma=0.005, clip=0.02, is_2D=False):
@@ -319,7 +330,7 @@ def load(filename, count=None):
     return points
 
 
-def save_ply(points, filename, colors=None, normals=None, binary=True):
+def save_ply(filename, points, colors=None, normals=None, binary=True):
     """
     save 3D/2D points to ply file
     Args:
@@ -376,7 +387,7 @@ def save_ply(points, filename, colors=None, normals=None, binary=True):
     ply.write(filename)
 
 
-def save_ply_property(points, property, filename, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
+def save_ply_property( filename, points, property, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
     point_num = points.shape[0]
     colors = np.full([point_num, 3], 0.5)
     cmap = cm.get_cmap(cmap_name)
@@ -390,7 +401,7 @@ def save_ply_property(points, property, filename, property_max=None, property_mi
     normalizer = mpc.Normalize(vmin=property_min, vmax=property_max)
     p = normalizer(property)
     colors = cmap(p)[:,:3]
-    save_ply(points, filename, colors, normals, binary)
+    save_ply(filename, points, colors, normals, binary)
 
 def save_pts(filename, points, normals=None, labels=None):
     assert(points.ndim==2)
