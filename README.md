@@ -19,7 +19,11 @@ Many of the functions are adapted from the code base of amazing researchers. Tha
 # update conda
 conda update -n base -c defaults conda
 # requirements
-conda create --name pytorch-all -f environment.yml
+conda create --name pytorch-all -f environment.yml  # to create a new conda environment
+# or
+conda config --add channels pytorch
+conda config --add channels conda-forge
+conda install --file requirements.txt
 
 python setup.py install
 ```
