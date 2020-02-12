@@ -116,7 +116,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     points = grouped_points - group_center
     allpoints = points.view(-1, nn_size, C).contiguous()
     # MB,C,k
-    U, S, V = batch_svd(allpoints)
+    U, S, V = torch.svd(allpoints)
     # V is MBxCxC, last_u MBxC
     normals = V[:, :, -1]
     normals = normals.view(batch_size, M, C)

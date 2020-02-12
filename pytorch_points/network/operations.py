@@ -404,52 +404,6 @@ class QueryAndGroup(torch.nn.Module):
         return new_features
 
 
-class BatchSVDFunction(torch.autograd.Function):
-    """
-    batched svd implemented by https://github.com/KinglittleQ/torch-batch-svd
-    """
-    @staticmethod
-    def forward(ctx, x):
-        ctx.device = x.device
-        if not torch.cuda.is_available():
-            assert(RuntimeError), "BatchSVDFunction only runs on gpu"
-        x = x.cuda()
-        U, S, V = linalg.batch_svd_forward(x, True, 1e-7, 100)
-        k = S.size(1)
-        U = U[:, :, :k]
-        V = V[:, :, :k]
-        ctx.save_for_backward(x, U, S, V)
-        U = U.to(ctx.device)
-        S = S.to(ctx.device)
-        V = V.to(ctx.device)
-        return U, S, V
-
-    @staticmethod
-    def backward(ctx, grad_u, grad_s, grad_v):
-        x, U, S, V = ctx.saved_variables
-
-        grad_out = linalg.batch_svd_backward(
-            [grad_u, grad_s, grad_v],
-            x, True, True, U, S, V
-        )
-
-        return grad_out.to(device=ctx.device)
-
-
-def batch_svd(x):
-    """
-    input:
-        x --- shape of [B, M, N], k = min(M,N)
-    return:
-        U, S, V = batch_svd(x) where x = USV^T
-        U [M, k]
-        V [N, k]
-        S [B, k] in decending order
-    """
-    assert(x.dim() == 3)
-    return BatchSVDFunction.apply(x)
-
-
 def normalize(tensor, dim=-1):
     """normalize tensor in specified dimension"""
     return torch.nn.functional.normalize(tensor, p=2, dim=dim, eps=1e-12, out=None)

@@ -5,10 +5,9 @@ Many of the functions are adapted from the code base of amazing researchers. Tha
 
 ### structures
 
-- `_ext`: cuda extensions, 
+- `_ext`: cuda extensions,
   - losses: "chamfer distance"
   - sampling: "farthest_sampling", "ball_query"
-  - linalg: "batch_SVD"     
 - `network`: common pytorch layers and operations for point cloud processing
   - operations: "group_KNN", "batch_normals"
   - layers
@@ -28,6 +27,6 @@ python setup.py install
 ```
 
 ### related repositories:
-- [AtlasNet](https://github.com/ThibaultGROUEIX/AtlasNet): Thanks Thibault for your AtlasNet!!! 
+- [AtlasNet](https://github.com/ThibaultGROUEIX/AtlasNet): Thanks Thibault for your AtlasNet!!!
 - [Pointnet-Pytorch](https://github.com/erikwijmans/Pointnet2_PyTorch): pytorch implementation of pointnet.
 - [SO-Net](https://github.com/lijx10/SO-Net): CVPR 2018 spotlight paper

@@ -24,7 +24,7 @@ def error(message, *lines, ostream=sys.stdout):
                                    "{}") + "\n".join(lines) + "{}"
     print(
         string.format(ansi.RED_B,
-                      time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                      time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                       ansi.RED, ansi.ENDC), file=ostream)
     sys.exit(-1)
 
@@ -35,13 +35,13 @@ def warn(message, *lines, ostream=sys.stdout):
                                        "{}") + "\n".join(lines) + "{}"
         print(
             string.format(ansi.YELLOW_B,
-                          time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                           ansi.YELLOW, ansi.ENDC), file=ostream)
     else:
         string = "{}{}: " + "\n".join(lines) + "{}"
         print(
             string.format(ansi.YELLOW,
-                          time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                           ansi.ENDC), file=ostream)
 
 
@@ -55,13 +55,13 @@ def info(message, *lines, ostream=sys.stdout, bold=False):
                                        "{}") + "\n".join(lines) + "{}"
         print(
             string.format(color,
-                          time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                           ansi.WHITE, ansi.ENDC), file=ostream)
     else:
         string = "{}{}: " + "\n".join(lines) + "{}"
         print(
             string.format(ansi.WHITE,
-                          time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                           ansi.ENDC), file=ostream)
 
 
@@ -71,11 +71,11 @@ def success(message, *lines, ostream=sys.stdout):
                                        "{}") + "\n".join(lines) + "{}"
         print(
             string.format(ansi.BLUE_B,
-                          time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                           ansi.BLUE, ansi.ENDC), file=ostream)
     else:
         string = "{}{}: " + "\n".join(lines) + "{}"
         print(
             string.format(ansi.BLUE,
-                          time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
+                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
                           ansi.ENDC), file=ostream)
