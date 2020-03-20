@@ -1,7 +1,7 @@
 import torch
-from .._ext import sampling, linalg
+from .._ext import sampling
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
-from .operations import normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn, gather_points
+from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn, gather_points
 import numpy as np
 from scipy import sparse
 
@@ -115,7 +115,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     points = grouped_points - group_center
     allpoints = points.view(-1, nn_size, C).contiguous()
     # MB,C,k
-    U, S, V = linalg.batch_svd(allpoints)
+    U, S, V = batch_svd(allpoints)
     # V is MBxCxC, last_u MBxC
     normals = V[:, :, -1]
     normals = normals.view(batch_size, M, C)
