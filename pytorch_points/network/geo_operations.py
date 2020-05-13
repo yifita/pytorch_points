@@ -1,7 +1,8 @@
 import torch
+import pytorch3d.ops as ops
 from .._ext import sampling
 from ..utils.pytorch_utils import check_values, save_grad, saved_variables
-from .operations import batch_svd, normalize, dot_product, scatter_add, faiss_knn, cross_product_2D, group_knn, gather_points
+from .operations import batch_svd, normalize, dot_product, scatter_add, cross_product_2D, gather_points
 import numpy as np
 from scipy import sparse
 
@@ -108,7 +109,7 @@ def batch_normals(points, base=None, nn_size=20, NCHW=True, idx=None):
     batch_size, M, C = points.shape
     # B,M,k,C
     if idx is None:
-        grouped_points, idx, _ = group_knn(nn_size, points, base, unique=True, NCHW=False)
+        _, idx, grouped_points = ops.knn_points(points, base, K=nn_size, return_nn=True)
     else:
         grouped_points = torch.gather(base.unsqueeze(1).expand(-1,M,-1,-1), 2, idx.unsqueeze(-1).expand(-1,-1,-1,C))
     group_center = torch.mean(grouped_points, dim=2, keepdim=True)
@@ -135,7 +136,7 @@ def pointUniformLaplacian(points, knn_idx=None, nn_size=3):
     batch_size, num_points, _ = points.shape
     if knn_idx is None:
         # find neighborhood, (B,N,K,3), (B,N,K)
-        group_points, knn_idx, _ = faiss_knn(nn_size+1, points, points, NCHW=False)
+        _, knn_idx, group_points = ops.knn_points(points, points, K=nn_size+1, return_nn=True)
         knn_idx = knn_idx[:, :, 1:]
         group_points = group_points[:, :, 1:, :]
     else:

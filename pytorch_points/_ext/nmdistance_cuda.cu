@@ -123,7 +123,7 @@ int chamfer_cuda_forward(at::Tensor& xyz1, at::Tensor& xyz2, at::Tensor& dist1, 
 	const auto c = xyz1.size(2); //point dimension
 	CHECK_EQ(xyz2.size(2), c);
 	AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-		xyz1.type(), "NmDistanceKernel", ([&] {
+		xyz1.scalar_type(), "NmDistanceKernel", ([&] {
 			NmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*c*sizeof(scalar_t)>>>(batch_size, n, c, xyz1.data_ptr<scalar_t>(), m, xyz2.data_ptr<scalar_t>(), dist1.data_ptr<scalar_t>(), idx1.data_ptr<int>());
 			NmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*c*sizeof(scalar_t)>>>(batch_size, m, c, xyz2.data_ptr<scalar_t>(), n, xyz1.data_ptr<scalar_t>(), dist2.data_ptr<scalar_t>(), idx2.data_ptr<int>());
 			})
@@ -149,7 +149,7 @@ int labeled_chamfer_cuda_forward(const at::Tensor& xyz1, const at::Tensor& xyz2,
 
 	CHECK_EQ(xyz2.size(2), c);
 	AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-		xyz1.type(), "NmDistanceKernel", ([&] {
+		xyz1.scalar_type(), "NmDistanceKernel", ([&] {
 			LabeledNmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*(c+1)*sizeof(scalar_t)>>>(batch_size, n, c, xyz1.data_ptr<scalar_t>(), label1.toType(xyz1.scalar_type()).data_ptr<scalar_t>(), m,
 																								 xyz2.data_ptr<scalar_t>(), label2.toType(xyz1.scalar_type()).data_ptr<scalar_t>(), dist1.data_ptr<scalar_t>(), idx1.data_ptr<int>());
 			LabeledNmDistanceKernel<scalar_t><<<dim3(batch_size,16,1),BATCH,BATCH*(c+1)*sizeof(scalar_t)>>>(batch_size, m, c, xyz2.data_ptr<scalar_t>(), label2.toType(xyz1.scalar_type()).data_ptr<scalar_t>(), n,
@@ -205,7 +205,7 @@ int chamfer_cuda_backward(at::Tensor& xyz1, at::Tensor& xyz2, at::Tensor& gradxy
 	gradxyz2.zero_();
 	CHECK_EQ(xyz2.size(2), c);
 	AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-		xyz1.type(), "NmDistanceGradKernel", ([&] {
+		xyz1.scalar_type(), "NmDistanceGradKernel", ([&] {
 			NmDistanceGradKernel<scalar_t><<<dim3(batch_size,16,1),256>>>(batch_size,n,c,xyz1.data_ptr<scalar_t>(),m,xyz2.data_ptr<scalar_t>(),graddist1.data_ptr<scalar_t>(),idx1.data_ptr<int>(),gradxyz1.data_ptr<scalar_t>(),gradxyz2.data_ptr<scalar_t>());
 			NmDistanceGradKernel<scalar_t><<<dim3(batch_size,16,1),256>>>(batch_size,m,c,xyz2.data_ptr<scalar_t>(),n,xyz1.data_ptr<scalar_t>(),graddist2.data_ptr<scalar_t>(),idx2.data_ptr<int>(),gradxyz2.data_ptr<scalar_t>(),gradxyz1.data_ptr<scalar_t>());
 		})

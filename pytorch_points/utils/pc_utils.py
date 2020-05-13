@@ -272,16 +272,16 @@ def read_ply_with_face(file):
     return points, faces
 
 
-def save_ply_with_face_property(points, faces, property, property_max, filename, cmap_name="Set1", binary=True):
+def save_ply_with_face_property(filename, points, faces, property, property_max, cmap_name="Set1", binary=True):
     face_num = faces.shape[0]
     colors = np.full(faces.shape, 0.5)
     cmap = cm.get_cmap(cmap_name)
     for point_idx in range(face_num):
         colors[point_idx] = cmap(property[point_idx] / property_max)[:3]
-    save_ply_with_face(points, faces, filename, colors, binary=True)
+    save_ply_with_face(filename, points, faces, colors, binary=True)
 
 
-def save_ply_with_face(points, faces, filename, colors=None, binary=True):
+def save_ply_with_face(faces, filename, points, colors=None, binary=True):
     if points.shape[-1] == 2:
         points = np.concatenate([points, np.zeros_like(points)[:, :1]], axis=-1)
     vertex = np.array([tuple(p) for p in points], dtype=[
@@ -387,7 +387,7 @@ def save_ply(filename, points, colors=None, normals=None, binary=True):
     ply.write(filename)
 
 
-def save_ply_property( filename, points, property, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
+def save_ply_property(filename, points, property, property_max=None, property_min=None, normals=None, cmap_name='Set1', binary=True):
     point_num = points.shape[0]
     colors = np.full([point_num, 3], 0.5)
     cmap = cm.get_cmap(cmap_name)

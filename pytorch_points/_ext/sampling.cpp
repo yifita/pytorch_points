@@ -1,22 +1,19 @@
 #include "utils.h"
 #include <torch/extension.h>
-#include <torch/serialize/tensor.h>
-#include <ATen/cuda/CUDAContext.h>
 #include <vector>
-#include <THC/THC.h>
 #include "interpolate_gpu.h"
 
 // CUDA forward declarations
-extern THCState *state;
+
 
 void furthest_sampling_cuda_forward(const int m, const int seedIdx,
   at::Tensor& input, at::Tensor& temp, at::Tensor& idx);
 
 void gather_points_kernel_launcher_fast(int b, int c, int n, int npoints,
-    const float *points, const int *idx, float *out, cudaStream_t stream);
+    const float *points, const int *idx, float *out, at::cuda::CUDAStream stream);
 
 void gather_points_grad_kernel_launcher_fast(int b, int c, int n, int npoints,
-    const float *grad_out, const int *idx, float *grad_points, cudaStream_t stream);
+    const float *grad_out, const int *idx, float *grad_points, at::cuda::CUDAStream stream);
 
 
 int gather_points_wrapper_fast(int b, int c, int n, int npoints,
@@ -25,7 +22,7 @@ int gather_points_wrapper_fast(int b, int c, int n, int npoints,
     const int *idx = idx_tensor.data_ptr<int>();
     float *out = out_tensor.data_ptr<float>();
 
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     gather_points_kernel_launcher_fast(b, c, n, npoints, points, idx, out, stream);
     return 1;
 }
@@ -38,7 +35,7 @@ int gather_points_grad_wrapper_fast(int b, int c, int n, int npoints,
     const int *idx = idx_tensor.data_ptr<int>();
     float *grad_points = grad_points_tensor.data_ptr<float>();
 
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     gather_points_grad_kernel_launcher_fast(b, c, n, npoints, grad_out, idx, grad_points, stream);
     return 1;
 }
@@ -83,7 +80,7 @@ at::Tensor furthest_sampling_forward(
 }
 
 void ball_query_kernel_launcher_fast(int b, int n, int m, float radius, int nsample,
-	const float *xyz, const float *new_xyz, int *idx, cudaStream_t stream);
+	const float *xyz, const float *new_xyz, int *idx, at::cuda::CUDAStream stream);
 
 at::Tensor ball_query_wrapper_fast(at::Tensor& new_xyz_tensor, at::Tensor& xyz_tensor,
       const float radius, const int nsample) {
@@ -101,31 +98,10 @@ at::Tensor ball_query_wrapper_fast(at::Tensor& new_xyz_tensor, at::Tensor& xyz_t
     const int m = new_xyz_tensor.size(1);
     const int n = xyz_tensor.size(1);
 
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     ball_query_kernel_launcher_fast(b, n, m, radius, nsample, new_xyz, xyz, idx, stream);
     return idx_tensor;
 }
-// at::Tensor ball_query_cuda_forward(float radius, int nsample, at::Tensor new_xyz,
-//                                    at::Tensor xyz, at::Tensor out_idx);
-// at::Tensor ball_query_forward(at::Tensor query, at::Tensor xyz, const float radius,
-//                               const int nsample)
-// {
-//   CHECK_INPUT(query);
-//   CHECK_INPUT(xyz);
-//   CHECK_CUDA(xyz);
-//   CHECK_CUDA(query);
-
-//   at::Tensor idx =
-//       torch::zeros({query.size(0), query.size(1), nsample},
-//                    at::device(query.device()).dtype(at::ScalarType::Int));
-
-//   if (query.type().is_cuda())
-//   {
-//     ball_query_cuda_forward(radius, nsample, query,
-//                             xyz, idx);
-//   }
-//   return idx;
-// }
 void group_points_kernel_wrapper(int b, int c, int n, int npoints, int nsample,
                                  const float *points, const int *idx,
                                  float *out);
@@ -140,7 +116,7 @@ at::Tensor group_points(at::Tensor points, at::Tensor idx) {
   CHECK_IS_FLOAT(points);
   CHECK_IS_INT(idx);
 
-  if (points.type().is_cuda()) {
+  if (points.is_cuda()) {
     CHECK_CUDA(idx);
   }
 
@@ -148,7 +124,7 @@ at::Tensor group_points(at::Tensor points, at::Tensor idx) {
       torch::zeros({points.size(0), points.size(1), idx.size(1), idx.size(2)},
                    at::device(points.device()).dtype(at::ScalarType::Float));
 
-  if (points.type().is_cuda()) {
+  if (points.is_cuda()) {
     group_points_kernel_wrapper(points.size(0), points.size(1), points.size(2),
                                 idx.size(1), idx.size(2), points.data_ptr<float>(),
                                 idx.data_ptr<int>(), output.data_ptr<float>());
@@ -165,7 +141,7 @@ at::Tensor group_points_grad(at::Tensor grad_out, at::Tensor idx, const int n) {
   CHECK_IS_FLOAT(grad_out);
   CHECK_IS_INT(idx);
 
-  if (grad_out.type().is_cuda()) {
+  if (grad_out.is_cuda()) {
     CHECK_CUDA(idx);
   }
 
@@ -173,7 +149,7 @@ at::Tensor group_points_grad(at::Tensor grad_out, at::Tensor idx, const int n) {
       torch::zeros({grad_out.size(0), grad_out.size(1), n},
                    at::device(grad_out.device()).dtype(at::ScalarType::Float));
 
-  if (grad_out.type().is_cuda()) {
+  if (grad_out.is_cuda()) {
     group_points_grad_kernel_wrapper(
         grad_out.size(0), grad_out.size(1), n, idx.size(1), idx.size(2),
         grad_out.data_ptr<float>(), idx.data_ptr<int>(), output.data_ptr<float>());
@@ -191,7 +167,7 @@ void three_nn_wrapper_fast(int b, int n, int m, at::Tensor unknown_tensor,
     float *dist2 = dist2_tensor.data_ptr<float>();
     int *idx = idx_tensor.data_ptr<int>();
 
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     three_nn_kernel_launcher_fast(b, n, m, unknown, known, dist2, idx, stream);
 }
 
@@ -207,7 +183,7 @@ void three_interpolate_wrapper_fast(int b, int c, int m, int n,
     float *out = out_tensor.data_ptr<float>();
     const int *idx = idx_tensor.data_ptr<int>();
 
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     three_interpolate_kernel_launcher_fast(b, c, m, n, points, idx, weight, out, stream);
 }
 
@@ -222,7 +198,7 @@ void three_interpolate_grad_wrapper_fast(int b, int c, int n, int m,
     float *grad_points = grad_points_tensor.data_ptr<float>();
     const int *idx = idx_tensor.data_ptr<int>();
 
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     three_interpolate_grad_kernel_launcher_fast(b, c, n, m, grad_out, idx, weight, grad_points, stream);
 }
 

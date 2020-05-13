@@ -40,7 +40,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor>
 batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=100)
 {
     TORCH_CHECK(a.is_cuda(), "only cuda tensor is supported");
-    TORCH_CHECK(a.dtype() == at::kFloat, "only float is supported");
+    TORCH_CHECK(a.scalar_type() == at::kFloat, "only float is supported");
 
     auto handle_ptr = unique_allocate(cusolverDnCreate, cusolverDnDestroy);
     const auto A = a.contiguous().clone().transpose(1, 2).contiguous().transpose(1, 2);
@@ -53,12 +53,12 @@ batch_svd_forward(at::Tensor a, bool is_sort, double tol=1e-7, int max_sweeps=10
     const auto lda = m;
     const auto d_A = A.data_ptr<float>();
     const auto minmn = std::min(m, n);
-    auto s = at::empty({batch_size, minmn}, a.type());
+    auto s = at::empty({batch_size, minmn}, a.scalar_type());
     auto d_s = s.data_ptr<float>();
-    auto U = at::empty({batch_size, m, m}, a.type());
+    auto U = at::empty({batch_size, m, m}, a.scalar_type());
     const auto d_U = U.data_ptr<float>();
     const auto ldu = m;
-    auto V = at::empty({batch_size, n, n}, a.type());
+    auto V = at::empty({batch_size, n, n}, a.scalar_type());
     const auto d_V = V.data_ptr<float>();
     const auto ldv = n;
 

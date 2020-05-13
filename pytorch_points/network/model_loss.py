@@ -1,9 +1,8 @@
 import torch
+import pytorch3d.ops as ops
 import numpy as np
 from .._ext import losses
-from .operations import faiss_knn, group_knn
 from . import geo_operations as geo_op
-from matplotlib import cm
 
 
 class UniformLaplacianSmoothnessLoss(torch.nn.Module):
@@ -118,7 +117,7 @@ class PointEdgeLengthLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K)
-        group_points, knn_idx, _ = faiss_knn(self.nn_size+1, points_ref, points_ref, NCHW=False)
+        _, knn_idx, group_points = ops.knn_points(points_ref, points_ref, K=self.nn_size+1, return_nn=True)
         knn_idx = knn_idx[:, :, 1:]
         group_points= group_points[:,:,1:,:]
         dist_ref = torch.norm(group_points - points_ref.unsqueeze(2), dim=-1, p=2)
@@ -145,7 +144,7 @@ class PointStretchLoss(torch.nn.Module):
         point2: (B,N,D) pred points, uses connectivity of point1
         """
         # find neighborhood, (B,N,K,3), (B,N,K), (B,N,K)
-        group_points_ref, knn_idx, _ = group_knn(self.nn_size+1, points_ref, points_ref, NCHW=False, unique=True)
+        _, knn_idx, group_points_ref = ops.knn_points(points_ref, points_ref, K=self.nn_size+1, return_nn=True)
         knn_idx = knn_idx[:, :, 1:]
         group_points_ref = group_points_ref[:,:,1:,:]
         dist_ref = torch.norm(group_points_ref - points_ref.unsqueeze(2), dim=-1, p=2)
@@ -201,7 +200,7 @@ class MeshEdgeLengthLoss(torch.nn.Module):
         loss = []
         for b in range(B):
             edge_length1 = geo_op.get_edge_lengths(vert1[b], self.E[b])
-            edge_length1 = geo_op.get_edge_lengths(vert2[b], self.E[b])
+            edge_length2 = geo_op.get_edge_lengths(vert2[b], self.E[b])
             loss.append(self.metric(edge_length1, edge_length2))
 
         loss = torch.stack(loss, dim=0)
@@ -376,7 +375,7 @@ class SimplePointRepulsionLoss(torch.nn.Module):
     def forward(self, points, knn_idx=None):
         batchSize, PN, _ = points.shape
         if knn_idx is None:
-            knn_points, knn_idx, distance2 = faiss_knn(self.nn_size+1, points, points, NCHW=False)
+            distance2, knn_idx, knn_points=ops.knn_points(points, points, K=self.nn_size+1, return_nn=True)
             knn_points = knn_points[:, :, 1:, :].contiguous().detach()
             knn_idx = knn_idx[:, :, 1:].contiguous()
         else:
@@ -482,99 +481,3 @@ class LabeledNmdistanceFunction(torch.autograd.Function):
         return gradxyz1, gradxyz2, None, None
 
 labeled_nndistance = LabeledNmdistanceFunction.apply
-
-class ChamferLoss(torch.nn.Module):
-    """
-    chamfer loss. bidirectional nearest neighbor distance of two point sets.
-    mean_{xyz1}(nd_{1to2})+\beta*max_{xyz1}(nd_{1to2})+(\gamma+\delta|xyz1|)mean_{xyz2}(nd_{2to1})
-    Args:
-        threshold (float): distance beyond threshold*average_distance not be considered
-        percentage (float): consider a percentage of inner points
-        max (bool): use hausdorf, i.e. use max instead of mean
-    """
-
-    def __init__(self, threshold=None, beta=1.0, gamma=1, delta=0, percentage=1.0):
-        super(ChamferLoss, self).__init__()
-        # only consider distance smaller than threshold*mean(distance) (remove outlier)
-        self.__threshold = threshold
-        self.beta = beta
-        self.gamma = gamma
-        self.delta = delta
-        self.percentage = percentage
-
-    def set_threshold(self, value):
-        self.__threshold = value
-
-    def unset_threshold(self):
-        self.__threshold = None
-
-    def forward(self, pred, gt, pred_mask=None, gt_mask=None):
-        """
-        chamfer disntance between (B,N,3) and (B,M,3) points
-        if pred_mask and gt_mask is given, then set unmasked loss to zero
-        """
-        assert(pred.dim() == 3 and gt.dim() == 3), \
-            "input for ChamferLoss must be a 3D-tensor, but pred.size() is {} gt.size() is {}".format(pred.size(), gt.size())
-        if pred_mask is not None:
-            assert(pred.shape[:2] == pred_mask.shape), "Mask and input must have the same shape"
-        if gt_mask is not None:
-            assert(gt.shape[:2] == gt_mask.shape), "Mask and input must have the same shape"
-
-        assert(pred.size(2) == gt.size(2)), "input and output must be (B,N,D) and (B,M,D)"
-        pred = pred.contiguous()
-        gt = gt.contiguous()
-        B,N,_ = pred.shape
-        B,M,_ = gt.shape
-
-        # discard border points
-        if self.percentage < 1.0:
-            pred_center = torch.mean(pred, dim=1, keepdim=True)
-            pred, _, _ = faiss_knn(int(self.percentage * N), pred_center, pred, unique=False, NCHW=False)
-            pred = torch.squeeze(pred, dim=1)
-            # # BxN
-            # dist_sqr = torch.sum((pred - pred_center)**2, dim=-1)
-            # # Bx1
-            # dist_sqrm = torch.max(dist_sqr, dim=1, keepdim=True)
-            # weight = torch.exp(-dist_sqr / 1.5 * dist_sqrm)
-            # weight = weight / torch.max(weight)
-            # pred2gt = pred2gt * weight
-
-            gt_center = torch.mean(gt, dim=1, keepdim=True)
-            gt, _, _ = faiss_knn(int(self.percentage * M), gt_center, gt, unique=False, NCHW=False)
-            gt = torch.squeeze(gt, dim=1)
-            # # BxN
-            # dist_sqr = torch.sum((label - label_center)**2, dim=-1)
-            # # Bx1
-            # dist_sqrm = torch.max(dist_sqr, dim=1, keepdim=True)
-            # weight = torch.exp(-dist_sqr / 1.5 * dist_sqrm)
-            # weight = weight / torch.max(weight)
-            # gt2pred = gt2pred * weight
-        if pred_mask is not None:
-            # (B,N)
-            pred = torch.where(pred_mask.unsqueeze(-1), pred, torch.full(pred.shape, float("Inf"), device=pred.device, dtype=pred.dtype))
-        if gt_mask is not None:
-            gt = torch.where(gt_mask.unsqueeze(-1), gt, torch.full(gt.shape, float("Inf"), device=gt.device, dtype=gt.dtype))
-
-        pred2gt, gt2pred, _, _ = nndistance(pred, gt)
-
-        if self.__threshold is not None:
-            threshold = self.__threshold
-            forward_threshold = torch.mean(
-                pred2gt, dim=1, keepdim=True) * threshold
-            backward_threshold = torch.mean(
-                gt2pred, dim=1, keepdim=True) * threshold
-            # only care about distance within threshold (ignore strong outliers)
-            pred2gt = torch.where(
-                pred2gt < forward_threshold, pred2gt, torch.zeros_like(pred2gt))
-            gt2pred = torch.where(
-                gt2pred < backward_threshold, gt2pred, torch.zeros_like(gt2pred))
-
-        if pred_mask is not None:
-            pred2gt = torch.where(pred_mask, pred2gt, torch.zeros_like(pred2gt))
-        if gt_mask is not None:
-            gt2pred = torch.where(gt_mask, gt2pred, torch.zeros_like(gt2pred))
-
-        # pred2gt is for each element in gt, the closest distance to this element
-        loss = torch.mean(pred2gt, dim=-1) + torch.mean(gt2pred, dim=-1)*(self.delta*N+self.gamma)+torch.max(pred2gt, dim=-1)[0]*self.beta
-        loss = torch.mean(loss)
-        return loss

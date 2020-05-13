@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from .operations import group_knn, gather_points
+import pytorch3d.ops as ops
+from .operations import gather_points
 from .geo_operations import furthest_point_sample
 from typing import List
 
@@ -48,8 +49,9 @@ class DenseEdgeConv(nn.Module):
         """
         if idx is None:
             # BCN(K+1), BN(K+1)
-            knn_point, idx, _ = group_knn(k + 1, x, x, unique=True)
+            _, idx, knn_point = ops.knn_points(x.transpose(1,2), x.transpose(1,2), K=k+1, return_nn=True)
             idx = idx[:, :, 1:]
+            knn_point = knn_point.permute(0, 2, 3, 1)
             knn_point = knn_point[:, :, :, 1:]
 
         neighbor_center = torch.unsqueeze(x, dim=-1)
@@ -94,8 +96,9 @@ class SampledDenseEdgeConv(DenseEdgeConv):
         """
         if idx is None:
             # BCN(K+1), BN(K+1)
-            knn_point, idx, _ = group_knn(k + 1, query, x, unique=True)
+            idx, knn_point = ops.knn_points(query.transpose(1, 2), x.transpose(1, 2), K=k + 1, return_nn=True)
             idx = idx[:, :, 1:]
+            knn_point = knn_point.permute(0, 2, 3, 1)
             knn_point = knn_point[:, :, :, 1:]
 
         neighbor_center = torch.unsqueeze(query, dim=-1)
@@ -109,7 +112,7 @@ class SampledDenseEdgeConv(DenseEdgeConv):
         if nsample == 1:
             sampled_idx = None
             sampled_xyz = torch.mean(xyz, dim=-1, keepdim=True)
-            sampled_xyz, sampled_idx, _ = group_knn(1, sampled_xyz, xyz, unique=False)
+            _, sampled_idx, sampled_xyz = ops.knn_points(sampled_xyz.transpose(1,2), xyz.transpose(1,2), return_nn=True)
             sampled_xyz = sampled_xyz.squeeze(2)
             sampled_idx = sampled_idx.squeeze(1)
         else:
