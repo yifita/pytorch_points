@@ -1,81 +1,65 @@
-from __future__ import division
-
+""" From https://github.com/t177398/best_python_logger """
+import logging
 import sys
-import time
 
 
-class ansi:
-    """Color codes to print with color"""
-    WHITE = '\033[0;97m'
-    WHITE_B = '\033[1;97m'
-    YELLOW = '\033[0;33m'
-    YELLOW_B = '\033[1;33m'
-    RED = '\033[0;31m'
-    RED_B = '\033[1;31m'
-    BLUE = '\033[0;94m'
-    BLUE_B = '\033[1;94m'
-    CYAN = '\033[0;36m'
-    CYAN_B = '\033[1;36m'
-    ENDC = '\033[0m'
+def color_cheat_sheet():
+    # This doesn't work very good in IDEs python consoles.
+    terse = "-t" in sys.argv[1:] or "--terse" in sys.argv[1:]
+    write = sys.stdout.write
+    for i in range(2 if terse else 10):
+        for j in range(30, 38):
+            for k in range(40, 48):
+                if terse:
+                    write("\33[%d;%d;%dm%d;%d;%d\33[m " % (i, j, k, i, j, k))
+                else:
+                    write("%d;%d;%d: \33[%d;%d;%dm Hello, World! \33[m \n" %
+                          (i, j, k, i, j, k,))
+            write("\n")
 
 
-def error(message, *lines, ostream=sys.stdout):
-    string = "{}{}: " + message + ("{}\n" if lines else
-                                   "{}") + "\n".join(lines) + "{}"
-    print(
-        string.format(ansi.RED_B,
-                      time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                      ansi.RED, ansi.ENDC), file=ostream)
-    sys.exit(-1)
+class _CustomFormatter(logging.Formatter):
+    """Logging Formatter to add colors and count warning / errors"""
+
+    grey = "\x1b[0;37m"
+    green = "\x1b[1;32m"
+    yellow = "\x1b[1;33m"
+    red = "\x1b[1;31m"
+    purple = "\x1b[1;35m"
+    blue = "\x1b[1;34m"
+    light_blue = "\x1b[1;36m"
+    reset = "\x1b[0m"
+    blink_red = "\x1b[5m\x1b[1;31m"
+    format_prefix = f"{purple}%(asctime)s{reset} " \
+                    f"{blue}%(name)s{reset} " \
+                    f"{light_blue}(%(filename)s:%(lineno)d){reset} "
+
+    format_suffix = "%(levelname)s - %(message)s"
+
+    FORMATS = {
+        logging.DEBUG: format_prefix + green + format_suffix + reset,
+        logging.INFO: format_prefix + grey + format_suffix + reset,
+        logging.WARNING: format_prefix + yellow + format_suffix + reset,
+        logging.ERROR: format_prefix + red + format_suffix + reset,
+        logging.CRITICAL: format_prefix + blink_red + format_suffix + reset
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
 
 
-def warn(message, *lines, ostream=sys.stdout):
-    if message:
-        string = "{}{}: " + message + ("{}\n" if lines else
-                                       "{}") + "\n".join(lines) + "{}"
-        print(
-            string.format(ansi.YELLOW_B,
-                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                          ansi.YELLOW, ansi.ENDC), file=ostream)
-    else:
-        string = "{}{}: " + "\n".join(lines) + "{}"
-        print(
-            string.format(ansi.YELLOW,
-                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                          ansi.ENDC), file=ostream)
+# Just import this function into your programs
+# "from logger import get_logger"
+# "logger = get_logger(__name__)"
+# Use the variable __name__ so the logger will print the file's name also
 
-
-def info(message, *lines, ostream=sys.stdout, bold=False):
-    if bold:
-        color = ansi.WHITE_B
-    else:
-        color = ansi.WHITE
-    if message:
-        string = "{}{}: " + message + ("{}\n" if lines else
-                                       "{}") + "\n".join(lines) + "{}"
-        print(
-            string.format(color,
-                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                          ansi.WHITE, ansi.ENDC), file=ostream)
-    else:
-        string = "{}{}: " + "\n".join(lines) + "{}"
-        print(
-            string.format(ansi.WHITE,
-                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                          ansi.ENDC), file=ostream)
-
-
-def success(message, *lines, ostream=sys.stdout):
-    if message:
-        string = "{}{}: " + message + ("{}\n" if lines else
-                                       "{}") + "\n".join(lines) + "{}"
-        print(
-            string.format(ansi.BLUE_B,
-                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                          ansi.BLUE, ansi.ENDC), file=ostream)
-    else:
-        string = "{}{}: " + "\n".join(lines) + "{}"
-        print(
-            string.format(ansi.BLUE,
-                          time.strftime('%Y-%m-%d %H-%M-%S', time.gmtime()),
-                          ansi.ENDC), file=ostream)
+def get_logger(name):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(_CustomFormatter())
+    logger.addHandler(ch)
+    return logger
